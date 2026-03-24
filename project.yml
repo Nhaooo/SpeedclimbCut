@@ -12,6 +12,8 @@ targets:
           - "**/*.py"
           - "project.yml"
           - ".github"
+    info:
+      path: Info.plist
     settings:
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
