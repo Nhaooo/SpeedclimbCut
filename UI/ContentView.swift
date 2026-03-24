@@ -129,24 +129,49 @@ struct AnalysisResultView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("✅ Analyse Terminée")
+            Text(result.isValid ? "✅ Analyse Terminée" : "❌ Échec de l'analyse")
                 .font(.title).bold()
             
             if result.isValid {
                 Text("Start: +\(String(format: "%.2fs", result.startTime?.seconds ?? 0))")
                 Text("Top: +\(String(format: "%.2fs", result.topTime?.seconds ?? 0))")
-                
                 Text("Vidéo coupée copiée dans tes Photos !")
                     .foregroundColor(.green)
                     .multilineTextAlignment(.center)
-            } else {
-                Text("Échec de l'analyse.")
-                    .foregroundColor(.red)
-                Text("L'algorithme a perdu la piste.")
+            }
+            
+            VStack(alignment: .leading) {
+                HStack {
+                    Text("Telemetry Logs:")
+                        .font(.caption).bold()
+                    Spacer()
+                    Button(action: {
+                        UIPasteboard.general.string = result.debugLogs
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                        Text("Copier")
+                    }
+                    .font(.caption)
+                    .padding(5)
+                    .background(Color.gray.opacity(0.2))
+                    .cornerRadius(5)
+                }
+                
+                ScrollView {
+                    Text(result.debugLogs)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxHeight: 200)
+                .padding(5)
+                .background(Color.black.opacity(0.05))
+                .cornerRadius(8)
             }
             
             Button("Retour", action: onDismiss)
                 .padding()
+                .frame(maxWidth: .infinity)
                 .background(Color.blue)
                 .foregroundColor(.white)
                 .cornerRadius(10)
@@ -155,5 +180,6 @@ struct AnalysisResultView: View {
         .background(Color.white)
         .cornerRadius(20)
         .shadow(radius: 10)
+        .padding()
     }
 }

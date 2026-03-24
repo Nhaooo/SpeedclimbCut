@@ -14,6 +14,9 @@ struct AnalysisResult {
     /// Score of the person tracked to give confidence info
     let targetConfidenceScore: CGFloat
     
+    /// Telemetry for remote debugging
+    let debugLogs: String
+    
     var isValid: Bool {
         return trimStart != nil && trimEnd != nil
     }

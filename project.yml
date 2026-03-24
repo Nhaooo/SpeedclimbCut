@@ -17,3 +17,5 @@ targets:
     settings:
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
+      INFOPLIST_FILE: Info.plist
+      GENERATE_INFOPLIST_FILE: NO

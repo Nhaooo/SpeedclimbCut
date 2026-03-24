@@ -24,74 +24,104 @@ class VideoAnalysisService: ObservableObject {
     }
     
     private func processVideo(url: URL) {
+        var logs = "--- START TELEMETRY ---\n"
         let asset = AVAsset(url: url)
         
-        // Simplified Video Processing logic for MVP
-        // In real world: we use AVAssetReader to get frames at 15 FPS
-        // Then we run VNDetectHumanRectanglesRequest on each frame
-        // Here we simulate the logic flow
-        
-        DispatchQueue.main.async { self.currentStatus = "Extraction des frames..." }
-        
-        // NOTE: In a complete implementation, an AVAssetReader loop goes here.
-        // It outputs CVPixelBuffer and we run Vision requests.
-        // For brevity and clear architecture, we assume trackingService.processFrame was called in a loop.
-        
-        // ----
-        // Simulated tracking process...
-        // let request = VNDetectHumanRectanglesRequest { ... trackingService.processFrame(...) }
-        // ----
-        
-        // MOCK DATA for compilation and structure demo
-        // Assume climber went from y=0.1 to y=0.9
-        let dummyTrack = PersonTrack(id: UUID(), points: [
-            TrackPoint(time: CMTime(seconds: 0.1, preferredTimescale: 600), y: 0.1, bbox: .zero),
-            TrackPoint(time: CMTime(seconds: 1.0, preferredTimescale: 600), y: 0.1, bbox: .zero),
-            // Starts climbing
-            TrackPoint(time: CMTime(seconds: 1.5, preferredTimescale: 600), y: 0.15, bbox: .zero),
-            TrackPoint(time: CMTime(seconds: 2.0, preferredTimescale: 600), y: 0.3, bbox: .zero),
-            TrackPoint(time: CMTime(seconds: 3.0, preferredTimescale: 600), y: 0.5, bbox: .zero),
-            TrackPoint(time: CMTime(seconds: 4.0, preferredTimescale: 600), y: 0.75, bbox: .zero),
-            // Top reached
-            TrackPoint(time: CMTime(seconds: 5.0, preferredTimescale: 600), y: 0.85, bbox: .zero),
-            TrackPoint(time: CMTime(seconds: 6.0, preferredTimescale: 600), y: 0.85, bbox: .zero)
-        ])
-        
-        DispatchQueue.main.async { self.currentStatus = "Recherche du grimpeur cible..." }
-        
-        // Find best track
-        guard let targetTrack = /* trackingService.getTargetTrack() */ dummyTrack as PersonTrack? else {
-            DispatchQueue.main.async { self.isAnalyzing = false }
+        guard let reader = try? AVAssetReader(asset: asset),
+              let videoTrack = asset.tracks(withMediaType: .video).first else {
+            logs += "ERROR: Could not create AVAssetReader or find video track.\n"
+            finishWithError(logs: logs)
             return
         }
         
-        DispatchQueue.main.async { self.currentStatus = "Détection Start et Top..." }
+        logs += "Asset loaded.\n"
+        
+        let outputSettings: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
+        reader.add(trackOutput)
+        reader.startReading()
+        
+        var framesProcessed = 0
+        let targetFPS: Double = 10.0
+        let frameInterval = CMTime(seconds: 1.0 / targetFPS, preferredTimescale: 600)
+        var nextTargetTime = CMTime.zero
+        
+        logs += "Starting Vision Request loop at 10 FPS...\n"
+        let request = VNDetectHumanRectanglesRequest()
+        
+        DispatchQueue.main.async { self.currentStatus = "Analyse Visuelle..." }
+        
+        while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            
+            if pts >= nextTargetTime {
+                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
+                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+                do {
+                    try handler.perform([request])
+                    if let results = request.results {
+                        let boxes = results.map { $0.boundingBox }
+                        trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
+                        if framesProcessed % 30 == 0 {
+                            logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
+                        }
+                    }
+                } catch {
+                    logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
+                }
+
+                nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
+                framesProcessed += 1
+                
+                if framesProcessed % 20 == 0 {
+                    DispatchQueue.main.async { self.currentStatus = "Analyse frame \(framesProcessed)..." }
+                }
+            }
+        }
+        
+        logs += "Extraction complete. \(framesProcessed) frames traitées.\n"
+        
+        guard let targetTrack = trackingService.getTargetTrack() else {
+            logs += "CRITICAL ERROR: trackingService.getTargetTrack() returned nil. Personne n'a bougé verticalement !\n"
+            finishWithError(logs: logs)
+            return
+        }
+        
+        logs += "🎯 Target Track sélectionné : UUID \(targetTrack.id.uuidString.prefix(4)), Score vertical: \(String(format: "%.2f", targetTrack.totalScore))\n"
         let result = eventDetector.analyzeTrack(targetTrack)
         
-        guard result.isValid, let start = result.trimStart, let end = result.trimEnd else {
-            DispatchQueue.main.async { 
-                self.lastResult = result
-                self.isAnalyzing = false 
-            }
-            return
-        }
-        
-        DispatchQueue.main.async { self.currentStatus = "Découpage de la vidéo (Trim)..." }
-        
-        trimExportService.trimVideo(url: url, start: start, end: end) { exportedURL, error in
-            if let exportedURL = exportedURL {
-                DispatchQueue.main.async { self.currentStatus = "Sauvegarde dans Photos..." }
-                self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, error in
-                    DispatchQueue.main.async {
-                        // Clean up
+        if result.isValid, let start = result.trimStart, let end = result.trimEnd {
+            logs += "✅ SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
+            
+            DispatchQueue.main.async { self.currentStatus = "Découpage (Trim)..." }
+            trimExportService.trimVideo(url: url, start: start, end: end) { exportedURL, error in
+                if let exportedURL = exportedURL {
+                    DispatchQueue.main.async { self.currentStatus = "Sauvegarde Galerie..." }
+                    self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, _ in
                         try? FileManager.default.removeItem(at: exportedURL)
-                        self.lastResult = result
-                        self.isAnalyzing = false
+                        DispatchQueue.main.async {
+                            self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: logs)
+                            self.isAnalyzing = false
+                        }
                     }
+                } else {
+                    logs += "ERROR: trimVideo exportedURL est nil.\n"
+                    self.finishWithError(logs: logs)
                 }
-            } else {
-                DispatchQueue.main.async { self.isAnalyzing = false }
             }
+        } else {
+            logs += "CRITICAL ERROR: EventDetector n'a pas validé le Start ou le Top.\n"
+            logs += "Event Details - start: \(result.startTime?.seconds ?? -1), top: \(result.topTime?.seconds ?? -1)\n"
+            finishWithError(logs: logs)
+        }
+    }
+    
+    private func finishWithError(logs: String) {
+        DispatchQueue.main.async {
+            self.lastResult = AnalysisResult(startTime: nil, topTime: nil, trimStart: nil, trimEnd: nil, targetConfidenceScore: 0, debugLogs: logs)
+            self.isAnalyzing = false
         }
     }
     
