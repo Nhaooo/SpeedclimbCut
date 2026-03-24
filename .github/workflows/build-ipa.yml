@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install xcodegen
         run: brew install xcodegen
@@ -37,7 +37,7 @@ jobs:
           zip -r SpeedClimbCut.ipa Payload
 
       - name: Upload IPA
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: SpeedClimbCut-Unsigned-IPA
           path: SpeedClimbCut.ipa
