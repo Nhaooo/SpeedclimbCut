@@ -4,6 +4,7 @@ import Vision
 
 class PersonTrackingService {
     private var tracks: [UUID: PersonTrack] = [:]
+    private var completedTracks: [PersonTrack] = []
 
     func processFrame(cmTime: CMTime, boundingBoxes: [CGRect], debug: Bool = false) {
         var unassignedBoxes = boundingBoxes
@@ -32,7 +33,11 @@ class PersonTrackingService {
         }
 
         tracks = tracks.filter { _, track in
-            track.missedFrames <= AppConfig.maxTrackingMissedFrames
+            let isStillActive = track.missedFrames <= AppConfig.maxTrackingMissedFrames
+            if !isStillActive, track.points.count >= AppConfig.startConfirmationFrames {
+                completedTracks.append(track)
+            }
+            return isStillActive
         }
 
         for box in unassignedBoxes {
@@ -76,10 +81,12 @@ class PersonTrackingService {
     }
 
     func getTargetTrack() -> PersonTrack? {
-        return tracks.values.max(by: { $0.totalScore < $1.totalScore })
+        let candidates = Array(tracks.values) + completedTracks
+        return candidates.max(by: { $0.totalScore < $1.totalScore })
     }
 
     func reset() {
         tracks.removeAll()
+        completedTracks.removeAll()
     }
 }
