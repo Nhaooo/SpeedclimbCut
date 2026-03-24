@@ -2,32 +2,61 @@ import Foundation
 import Photos
 import UIKit
 
-class PhotoLibraryService: NSObject, ObservableObject {
-    private var completionHandler: ((Bool, Error?) -> Void)?
-    
+class PhotoLibraryService: ObservableObject {
     func saveVideoToLibrary(url: URL, completion: @escaping (Bool, Error?) -> Void) {
-        self.completionHandler = completion
-        
-        // Verify file exists before attempting to save to prevent crashes
+        // 1. Check if source file exists
         guard FileManager.default.fileExists(atPath: url.path) else {
-            let error = NSError(domain: "PhotoLibraryAccess", code: 404, userInfo: [NSLocalizedDescriptionKey: "Fichier vidéo introuvable"])
+            DispatchQueue.main.async {
+                completion(false, NSError(domain: "PhotoLibraryAccess", code: 404, userInfo: [NSLocalizedDescriptionKey: "Fichier source introuvable"]))
+            }
+            return
+        }
+        
+        // 2. Copy the file to guarantee it's not locked by AVFoundation
+        let safeURL = FileManager.default.temporaryDirectory.appendingPathComponent("safe_save_\(UUID().uuidString).mp4")
+        do {
+            try FileManager.default.copyItem(at: url, to: safeURL)
+        } catch {
             DispatchQueue.main.async { completion(false, error) }
             return
         }
         
-        // Use the older, much more robust API that doesn't hard-crash on invalid formats or locked files
-        if UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(url.path) {
-            UISaveVideoAtPathToSavedPhotosAlbum(url.path, self, #selector(video(_:didFinishSavingWithError:contextInfo:)), nil)
-        } else {
-            let error = NSError(domain: "PhotoLibraryAccess", code: 400, userInfo: [NSLocalizedDescriptionKey: "Vidéo incompatible avec la galerie"])
-            DispatchQueue.main.async { completion(false, error) }
+        // 3. Define the save action using modern API
+        let saveAction = {
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .video, fileURL: safeURL, options: nil)
+            }) { success, error in
+                // Cleanup the copy
+                try? FileManager.default.removeItem(at: safeURL)
+                
+                DispatchQueue.main.async {
+                    completion(success, error)
+                }
+            }
         }
-    }
-    
-    @objc func video(_ videoPath: String, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
-        DispatchQueue.main.async {
-            self.completionHandler?(error == nil, error)
-            self.completionHandler = nil
+        
+        // 4. Request explicit permission to Add Photos
+        if #available(iOS 14, *) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                if status == .authorized || status == .limited {
+                    saveAction()
+                } else {
+                    DispatchQueue.main.async {
+                        completion(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusée"]))
+                    }
+                }
+            }
+        } else {
+            PHPhotoLibrary.requestAuthorization { status in
+                if status == .authorized || status == .limited {
+                    saveAction()
+                } else {
+                    DispatchQueue.main.async {
+                        completion(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusée"]))
+                    }
+                }
+            }
         }
     }
 }
