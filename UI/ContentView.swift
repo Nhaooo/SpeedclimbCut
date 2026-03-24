@@ -147,6 +147,17 @@ struct ContentView: View {
 struct AnalysisResultView: View {
     let result: AnalysisResult
     let onDismiss: () -> Void
+    @State private var showLogs = false
+    private let maxVisibleLogCharacters = 6000
+
+    private var visibleLogs: String {
+        guard result.debugLogs.count > maxVisibleLogCharacters else {
+            return result.debugLogs
+        }
+
+        let suffix = result.debugLogs.suffix(maxVisibleLogCharacters)
+        return "[Logs tronques dans l'UI - copie pour avoir le complet]\n" + String(suffix)
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -170,8 +181,10 @@ struct AnalysisResultView: View {
 
             VStack(alignment: .leading) {
                 HStack {
-                    Text("Telemetry Logs:")
-                        .font(.caption.bold())
+                    Button(showLogs ? "Masquer les logs" : "Afficher les logs") {
+                        showLogs.toggle()
+                    }
+                    .font(.caption.bold())
 
                     Spacer()
 
@@ -187,16 +200,18 @@ struct AnalysisResultView: View {
                     .cornerRadius(5)
                 }
 
-                ScrollView {
-                    Text(result.debugLogs)
-                        .font(.system(size: 10, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .multilineTextAlignment(.leading)
+                if showLogs {
+                    ScrollView {
+                        Text(visibleLogs)
+                            .font(.system(size: 10, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .frame(maxHeight: 200)
+                    .padding(5)
+                    .background(Color.black.opacity(0.05))
+                    .cornerRadius(8)
                 }
-                .frame(maxHeight: 200)
-                .padding(5)
-                .background(Color.black.opacity(0.05))
-                .cornerRadius(8)
             }
 
             Button("Retour", action: onDismiss)

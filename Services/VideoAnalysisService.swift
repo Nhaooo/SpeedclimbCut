@@ -96,6 +96,7 @@ final class VideoAnalysisService: ObservableObject {
             ]
 
             let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
+            trackOutput.alwaysCopiesSampleData = false
             guard reader.canAdd(trackOutput) else {
                 logs += "ERROR: Could not attach track output to reader.\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
@@ -131,26 +132,37 @@ final class VideoAnalysisService: ObservableObject {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
                 if pts < nextTargetTime {
+                    CMSampleBufferInvalidate(sampleBuffer)
                     continue
                 }
 
-                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                var didConsumeFrame = false
+
+                autoreleasepool {
+                    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                        return
+                    }
+
+                    didConsumeFrame = true
+                    let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: videoOrientation, options: [:])
+
+                    do {
+                        try handler.perform([request])
+                        let boxes = request.results?.map { self.transformRect($0.boundingBox, orientation: videoOrientation) } ?? []
+                        self.trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
+
+                        if framesProcessed % 30 == 0 {
+                            logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
+                        }
+                    } catch {
+                        logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
+                    }
+                }
+
+                CMSampleBufferInvalidate(sampleBuffer)
+                guard didConsumeFrame else {
                     nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
                     continue
-                }
-
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: videoOrientation, options: [:])
-
-                do {
-                    try handler.perform([request])
-                    let boxes = request.results?.map { self.transformRect($0.boundingBox, orientation: videoOrientation) } ?? []
-                    self.trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
-
-                    if framesProcessed % 30 == 0 {
-                        logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
-                    }
-                } catch {
-                    logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
                 }
 
                 nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
@@ -217,9 +229,12 @@ final class VideoAnalysisService: ObservableObject {
                 completionLogs += "Export Error: \(error.localizedDescription)\n"
             }
 
-            finishWithError(logs: completionLogs, cleanupURLs: [sourceURL])
+            recordingManager.cleanup(url: sourceURL)
+            finishWithError(logs: completionLogs, cleanupURLs: [])
             return
         }
+
+        recordingManager.cleanup(url: sourceURL)
 
         DispatchQueue.main.async {
             self.currentStatus = "Sauvegarde galerie..."
@@ -236,21 +251,17 @@ final class VideoAnalysisService: ObservableObject {
                 completionLogs += "ERROR Galerie: sauvegarde retournee sans erreur explicite.\n"
             }
 
-            let cleanupURLs = [sourceURL, exportedURL]
-            let visibleExportURL = success ? nil : exportedURL
-
             self.finishWithResult(
                 analysisResult,
                 logs: completionLogs,
-                exportedURL: visibleExportURL,
-                cleanupURLs: cleanupURLs
+                savedToLibrary: success
             )
         }
+
+        recordingManager.cleanup(url: exportedURL)
     }
 
-    private func finishWithResult(_ result: AnalysisResult, logs: String, exportedURL: URL?, cleanupURLs: [URL]) {
-        markForCleanup(cleanupURLs)
-
+    private func finishWithResult(_ result: AnalysisResult, logs: String, savedToLibrary: Bool) {
         DispatchQueue.main.async {
             self.lastResult = AnalysisResult(
                 startTime: result.startTime,
@@ -259,8 +270,8 @@ final class VideoAnalysisService: ObservableObject {
                 trimEnd: result.trimEnd,
                 targetConfidenceScore: result.targetConfidenceScore,
                 debugLogs: logs,
-                exportedURL: exportedURL,
-                savedToLibrary: exportedURL == nil
+                exportedURL: nil,
+                savedToLibrary: savedToLibrary
             )
             self.currentStatus = ""
             self.isAnalyzing = false
