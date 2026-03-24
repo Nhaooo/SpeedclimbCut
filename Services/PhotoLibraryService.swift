@@ -21,6 +21,9 @@ class PhotoLibraryService: ObservableObject {
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
             }) { saved, error in
+                if let error = error {
+                    print("Erreur lors de la sauvegarde dans Photos: \(error.localizedDescription)")
+                }
                 DispatchQueue.main.async {
                     completion(saved, error)
                 }

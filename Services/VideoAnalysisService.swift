@@ -102,11 +102,16 @@ class VideoAnalysisService: ObservableObject {
             logs += "✅ SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
             
             DispatchQueue.main.async { self.currentStatus = "Découpage (Trim)..." }
-            trimExportService.trimVideo(url: url, start: start, end: end) { exportedURL, error in
+            trimExportService.trimVideo(url: url, start: start, end: end) { [weak self] exportedURL, error in
+                guard let self = self else { return }
+                
                 if let exportedURL = exportedURL {
                     DispatchQueue.main.async { self.currentStatus = "Sauvegarde Galerie..." }
                     self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, _ in
-                        try? FileManager.default.removeItem(at: exportedURL)
+                        // Retarder la suppression du fichier temporaire pour éviter un conflit avec Photos
+                        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) {
+                            try? FileManager.default.removeItem(at: exportedURL)
+                        }
                         DispatchQueue.main.async {
                             self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: logs)
                             self.isAnalyzing = false
