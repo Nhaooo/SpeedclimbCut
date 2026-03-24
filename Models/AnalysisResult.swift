@@ -17,6 +17,9 @@ struct AnalysisResult {
     /// Telemetry for remote debugging
     let debugLogs: String
     
+    /// Path to the trimmed video file
+    let exportedURL: URL?
+    
     var isValid: Bool {
         return trimStart != nil && trimEnd != nil
     }
