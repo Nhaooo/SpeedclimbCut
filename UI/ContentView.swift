@@ -123,23 +123,9 @@ struct ContentView: View {
     }
 }
 
-struct ShareSheet: UIViewControllerRepresentable {
-    var activityItems: [Any]
-    var applicationActivities: [UIActivity]? = nil
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
 struct AnalysisResultView: View {
     let result: AnalysisResult
     let onDismiss: () -> Void
-    
-    @State private var isSharing = false
     
     var body: some View {
         VStack(spacing: 20) {
@@ -149,24 +135,9 @@ struct AnalysisResultView: View {
             if result.isValid {
                 Text("Start: +\(String(format: "%.2fs", result.startTime?.seconds ?? 0))")
                 Text("Top: +\(String(format: "%.2fs", result.topTime?.seconds ?? 0))")
-                
-                if result.exportedURL != nil {
-                    Button(action: {
-                        isSharing = true
-                    }) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up")
-                            Text("Sauvegarder / Partager la vidéo")
-                        }
-                        .font(.headline)
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                    }
-                    .padding(.top, 10)
-                }
+                Text("Vidéo coupée copiée dans tes Photos !")
+                    .foregroundColor(.green)
+                    .multilineTextAlignment(.center)
             }
             
             VStack(alignment: .leading) {
@@ -210,10 +181,5 @@ struct AnalysisResultView: View {
         .cornerRadius(20)
         .shadow(radius: 10)
         .padding()
-        .sheet(isPresented: $isSharing) {
-            if let url = result.exportedURL {
-                ShareSheet(activityItems: [url])
-            }
-        }
     }
 }

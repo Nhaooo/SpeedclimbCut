@@ -109,10 +109,19 @@ class VideoAnalysisService: ObservableObject {
                 guard let self = self else { return }
                 
                 if let exportedURL = exportedURL {
-                    DispatchQueue.main.async {
-                        self.logs += "✅ Vidéo prête à être partagée !\n"
-                        self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: self.logs, exportedURL: exportedURL)
-                        self.isAnalyzing = false
+                    DispatchQueue.main.async { self.currentStatus = "Sauvegarde Galerie..." }
+                    
+                    self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, error in
+                        if let error = error {
+                            self.logs += "ERROR Galerie: \(error.localizedDescription)\n"
+                        } else {
+                            self.logs += "✅ Vidéo sauvegardée dans la galerie !\n"
+                        }
+                        
+                        DispatchQueue.main.async {
+                            self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: self.logs, exportedURL: exportedURL)
+                            self.isAnalyzing = false
+                        }
                     }
                 } else {
                     self.logs += "ERROR: trimVideo exportedURL est nil.\n"
