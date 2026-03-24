@@ -68,7 +68,7 @@ class VideoAnalysisService: ObservableObject {
                 do {
                     try handler.perform([request])
                     if let results = request.results {
-                        let boxes = results.map { $0.boundingBox }
+                        let boxes = results.map { self.transformRect($0.boundingBox, orientation: videoOrientation) }
                         trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
                         if framesProcessed % 30 == 0 {
                             logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
@@ -145,6 +145,21 @@ class VideoAnalysisService: ObservableObject {
             return .down // Landscape Left
         }
         return .up
+    }
+    
+    private func transformRect(_ rect: CGRect, orientation: CGImagePropertyOrientation) -> CGRect {
+        switch orientation {
+        case .up:
+            return rect
+        case .down:
+            return CGRect(x: 1 - rect.maxX, y: 1 - rect.maxY, width: rect.width, height: rect.height)
+        case .left: // Portrait Upside Down (90 deg CCW)
+            return CGRect(x: rect.minY, y: 1 - rect.maxX, width: rect.height, height: rect.width)
+        case .right: // Portrait (90 deg CW)
+            return CGRect(x: 1 - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
+        default:
+            return rect
+        }
     }
     
     func reset() {
