@@ -109,23 +109,17 @@ class VideoAnalysisService: ObservableObject {
                 guard let self = self else { return }
                 
                 if let exportedURL = exportedURL {
-                    DispatchQueue.main.async { self.currentStatus = "Sauvegarde Galerie..." }
-                    
-                    // Delay slightly to ensure AVAssetExportSession has completely released the file lock
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, error in
-                            if let error = error {
-                                self.logs += "ERROR Galerie: \(error.localizedDescription)\n"
-                            }
-                            
-                            DispatchQueue.main.async {
-                                self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: self.logs)
-                                self.isAnalyzing = false
-                            }
-                        }
+                    DispatchQueue.main.async {
+                        // On ignore la sauvegarde auto dans la galerie pour l'instant
+                        self.logs += "✅ Vidéo sauvegardée dans les fichiers temporaires : \(exportedURL.lastPathComponent)\n"
+                        self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: self.logs)
+                        self.isAnalyzing = false
                     }
                 } else {
                     self.logs += "ERROR: trimVideo exportedURL est nil.\n"
+                    if let err = error {
+                        self.logs += "Export Error: \(err.localizedDescription)\n"
+                    }
                     self.finishWithError(logs: self.logs)
                 }
             }
