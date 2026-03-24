@@ -13,33 +13,37 @@ class VideoTrimExportService {
         let tempDir = NSTemporaryDirectory()
         let outputURL = URL(fileURLWithPath: tempDir).appendingPathComponent("climb_trimmed_\(UUID().uuidString).mp4")
         
-        // Ensure valid range
-        let duration = asset.duration
-        var finalStart = CMTimeMaximum(start, .zero)
-        var finalEnd = CMTimeMinimum(end, duration)
-        
-        if finalStart >= finalEnd {
-            // Fallback to the whole video if the times are inverted or invalid
-            finalStart = .zero
-            finalEnd = duration
-        }
-        
-        let timeRange = CMTimeRange(start: finalStart, end: finalEnd)
-        
-        exportSession.outputURL = outputURL
-        exportSession.outputFileType = .mp4
-        exportSession.timeRange = timeRange
-        
-        exportSession.exportAsynchronously {
-            switch exportSession.status {
-            case .completed:
-                completion(outputURL, nil)
-            case .failed:
-                completion(nil, exportSession.error)
-            case .cancelled:
-                completion(nil, NSError(domain: "Export", code: 499, userInfo: [NSLocalizedDescriptionKey: "Annulé"]))
-            default:
-                break
+        Task {
+            // Ensure valid range
+            let duration = try? await asset.load(.duration)
+            let actualDuration = duration ?? .zero
+            
+            var finalStart = CMTimeMaximum(start, .zero)
+            var finalEnd = CMTimeMinimum(end, actualDuration)
+            
+            if finalStart >= finalEnd {
+                // Fallback to the whole video if the times are inverted or invalid
+                finalStart = .zero
+                finalEnd = actualDuration
+            }
+            
+            let timeRange = CMTimeRange(start: finalStart, end: finalEnd)
+            
+            exportSession.outputURL = outputURL
+            exportSession.outputFileType = .mp4
+            exportSession.timeRange = timeRange
+            
+            exportSession.exportAsynchronously {
+                switch exportSession.status {
+                case .completed:
+                    completion(outputURL, nil)
+                case .failed:
+                    completion(nil, exportSession.error)
+                case .cancelled:
+                    completion(nil, NSError(domain: "Export", code: 499, userInfo: [NSLocalizedDescriptionKey: "Annulé"]))
+                default:
+                    break
+                }
             }
         }
     }
