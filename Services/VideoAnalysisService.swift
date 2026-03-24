@@ -77,7 +77,7 @@ class VideoAnalysisService: ObservableObject {
         
         DispatchQueue.main.async { self.currentStatus = "Découpage de la vidéo (Trim)..." }
         
-        let outputTempURL = trimExportService.trimVideo(url: url, start: start, end: end) { exportedURL, error in
+        trimExportService.trimVideo(url: url, start: start, end: end) { exportedURL, error in
             if let exportedURL = exportedURL {
                 DispatchQueue.main.async { self.currentStatus = "Sauvegarde dans Photos..." }
                 self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, error in
