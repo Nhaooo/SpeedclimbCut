@@ -7,7 +7,7 @@ final class VideoAnalysisService: ObservableObject {
     @Published var currentStatus = ""
     @Published var lastResult: AnalysisResult?
 
-    private let trackingService = PersonTrackingService()
+    private let hybridTrackingService = HybridVisionTrackingService()
     private let eventDetector = ClimbEventDetector()
     private let trimExportService = VideoTrimExportService()
     private let photoLibraryService = PhotoLibraryService()
@@ -60,7 +60,6 @@ final class VideoAnalysisService: ObservableObject {
 
     func reset() {
         cleanupPendingFiles()
-        trackingService.reset()
 
         lastResult = nil
         currentStatus = ""
@@ -68,7 +67,6 @@ final class VideoAnalysisService: ObservableObject {
     }
 
     private func processVideo(url: URL) {
-        trackingService.reset()
         let asset = AVAsset(url: url)
 
         Task { [weak self] in
@@ -83,44 +81,7 @@ final class VideoAnalysisService: ObservableObject {
                 return
             }
 
-            guard let reader = try? AVAssetReader(asset: asset) else {
-                logs += "ERROR: Could not create AVAssetReader.\n"
-                self.finishWithError(logs: logs, cleanupURLs: [url])
-                return
-            }
-
             logs += "Asset loaded.\n"
-
-            let outputSettings: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-            ]
-
-            let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
-            trackOutput.alwaysCopiesSampleData = false
-            guard reader.canAdd(trackOutput) else {
-                logs += "ERROR: Could not attach track output to reader.\n"
-                self.finishWithError(logs: logs, cleanupURLs: [url])
-                return
-            }
-
-            reader.add(trackOutput)
-
-            guard reader.startReading() else {
-                let readerError = reader.error?.localizedDescription ?? "Unknown AVAssetReader error"
-                logs += "ERROR: Could not start reading. \(readerError)\n"
-                self.finishWithError(logs: logs, cleanupURLs: [url])
-                return
-            }
-
-            var framesProcessed = 0
-            let targetFPS = Double(AppConfig.analysisFPS)
-            let frameInterval = CMTime(seconds: 1.0 / targetFPS, preferredTimescale: 600)
-            var nextTargetTime = CMTime.zero
-
-            logs += "Starting Vision Request loop at \(AppConfig.analysisFPS) FPS...\n"
-
-            let request = VNDetectHumanRectanglesRequest()
-            await self.updateStatus("Analyse visuelle...")
 
             var videoOrientation: CGImagePropertyOrientation = .up
             if let transform = try? await videoTrack.load(.preferredTransform) {
@@ -128,72 +89,66 @@ final class VideoAnalysisService: ObservableObject {
                 logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
             }
 
-            while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
-                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            await self.updateStatus("Suivi de la voie...")
 
-                if pts < nextTargetTime {
-                    CMSampleBufferInvalidate(sampleBuffer)
-                    continue
+            let trackingAnalysis: HybridVisionTrackingService.TrackingAnalysis
+            do {
+                guard let analysis = try await self.hybridTrackingService.analyze(
+                    asset: asset,
+                    videoTrack: videoTrack,
+                    orientation: videoOrientation
+                ) else {
+                    logs += "CRITICAL ERROR: Hybrid tracker returned nil.\n"
+                    self.finishWithError(logs: logs, cleanupURLs: [url])
+                    return
                 }
 
-                var didConsumeFrame = false
-
-                autoreleasepool {
-                    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                        return
-                    }
-
-                    didConsumeFrame = true
-                    let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: videoOrientation, options: [:])
-
-                    do {
-                        try handler.perform([request])
-                        let boxes = request.results?.map { self.transformRect($0.boundingBox, orientation: videoOrientation) } ?? []
-                        self.trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
-
-                        if framesProcessed % 30 == 0 {
-                            logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
-                        }
-                    } catch {
-                        logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
-                    }
-                }
-
-                CMSampleBufferInvalidate(sampleBuffer)
-                guard didConsumeFrame else {
-                    nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
-                    continue
-                }
-
-                nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
-                framesProcessed += 1
-
-                if framesProcessed % 20 == 0 {
-                    await self.updateStatus("Analyse frame \(framesProcessed)...")
-                }
-            }
-
-            if reader.status == .failed {
-                let readerError = reader.error?.localizedDescription ?? "Unknown reader failure"
-                logs += "ERROR: Reader failed before completion. \(readerError)\n"
+                trackingAnalysis = analysis
+            } catch {
+                logs += "CRITICAL ERROR: Hybrid tracker failed. \(error.localizedDescription)\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }
 
-            logs += "Extraction complete. \(framesProcessed) frames traitees.\n"
+            logs += trackingAnalysis.debugLogs
+            logs += "Hybrid target track: score \(String(format: "%.2f", trackingAnalysis.track.totalScore)), points: \(trackingAnalysis.track.points.count), peakY: \(String(format: "%.2f", trackingAnalysis.track.peakHeight)), lastY: \(String(format: "%.2f", trackingAnalysis.track.lastHeight))\n"
 
-            guard let targetTrack = self.trackingService.getTargetTrack() else {
-                logs += "CRITICAL ERROR: trackingService.getTargetTrack() returned nil. No climber moved enough vertically.\n"
-                self.finishWithError(logs: logs, cleanupURLs: [url])
-                return
+            let roughResult = self.eventDetector.analyzeTrack(trackingAnalysis.track)
+            logs += "Rough events -> start: \(roughResult.startTime?.seconds ?? -1), top: \(roughResult.topTime?.seconds ?? -1)\n"
+
+            await self.updateStatus("Raffinement haut du corps...")
+
+            let refinementResult: HybridVisionTrackingService.RefinementResult
+            do {
+                refinementResult = try await self.hybridTrackingService.refineEventTimes(
+                    asset: asset,
+                    videoTrack: videoTrack,
+                    orientation: videoOrientation,
+                    baseTrack: trackingAnalysis.track,
+                    roughResult: roughResult
+                )
+            } catch {
+                logs += "WARNING: Body pose refinement failed. \(error.localizedDescription)\n"
+                refinementResult = HybridVisionTrackingService.RefinementResult(
+                    startTime: roughResult.startTime,
+                    topTime: roughResult.topTime,
+                    debugLogs: ""
+                )
             }
 
-            logs += "Target track selected: UUID \(targetTrack.id.uuidString.prefix(4)), score: \(String(format: "%.2f", targetTrack.totalScore)), points: \(targetTrack.points.count), peakY: \(String(format: "%.2f", targetTrack.peakHeight)), lastY: \(String(format: "%.2f", targetTrack.lastHeight))\n"
-            let result = self.eventDetector.analyzeTrack(targetTrack)
+            logs += refinementResult.debugLogs
 
-            guard result.isValid, let start = result.trimStart, let end = result.trimEnd else {
+            let finalStartTime = refinementResult.startTime ?? roughResult.startTime
+            let finalTopTime = refinementResult.topTime ?? roughResult.topTime
+            let finalResult = self.makeFinalResult(
+                startTime: finalStartTime,
+                topTime: finalTopTime,
+                confidenceScore: trackingAnalysis.track.totalScore
+            )
+
+            guard finalResult.isValid, let start = finalResult.trimStart, let end = finalResult.trimEnd else {
                 logs += "CRITICAL ERROR: EventDetector could not validate Start or Top.\n"
-                logs += "Event details - start: \(result.startTime?.seconds ?? -1), top: \(result.topTime?.seconds ?? -1)\n"
+                logs += "Event details - start: \(finalStartTime?.seconds ?? -1), top: \(finalTopTime?.seconds ?? -1)\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }
@@ -205,13 +160,42 @@ final class VideoAnalysisService: ObservableObject {
                 guard let self else { return }
                 self.handleTrimCompletion(
                     sourceURL: url,
-                    analysisResult: result,
+                    analysisResult: finalResult,
                     logs: logs,
                     exportedURL: exportedURL,
                     error: error
                 )
             }
         }
+    }
+
+    private func makeFinalResult(startTime: CMTime?, topTime: CMTime?, confidenceScore: CGFloat) -> AnalysisResult {
+        guard let startTime, let topTime else {
+            return AnalysisResult(
+                startTime: startTime,
+                topTime: topTime,
+                trimStart: nil,
+                trimEnd: nil,
+                targetConfidenceScore: confidenceScore,
+                debugLogs: "",
+                exportedURL: nil,
+                savedToLibrary: false
+            )
+        }
+
+        let trimStart = CMTimeSubtract(startTime, CMTime(seconds: AppConfig.preStartTrimMarginSeconds, preferredTimescale: 600))
+        let trimEnd = CMTimeAdd(topTime, CMTime(seconds: AppConfig.postTopTrimMarginSeconds, preferredTimescale: 600))
+
+        return AnalysisResult(
+            startTime: startTime,
+            topTime: topTime,
+            trimStart: trimStart,
+            trimEnd: trimEnd,
+            targetConfidenceScore: confidenceScore,
+            debugLogs: "",
+            exportedURL: nil,
+            savedToLibrary: false
+        )
     }
 
     private func handleTrimCompletion(
@@ -338,20 +322,5 @@ final class VideoAnalysisService: ObservableObject {
         }
 
         return .up
-    }
-
-    private func transformRect(_ rect: CGRect, orientation: CGImagePropertyOrientation) -> CGRect {
-        switch orientation {
-        case .up:
-            return rect
-        case .down:
-            return CGRect(x: 1 - rect.maxX, y: 1 - rect.maxY, width: rect.width, height: rect.height)
-        case .left:
-            return CGRect(x: rect.minY, y: 1 - rect.maxX, width: rect.height, height: rect.width)
-        case .right:
-            return CGRect(x: 1 - rect.maxY, y: rect.minX, width: rect.height, height: rect.width)
-        default:
-            return rect
-        }
     }
 }
