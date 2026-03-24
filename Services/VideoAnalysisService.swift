@@ -251,14 +251,13 @@ final class VideoAnalysisService: ObservableObject {
                 completionLogs += "ERROR Galerie: sauvegarde retournee sans erreur explicite.\n"
             }
 
+            self.recordingManager.cleanup(url: exportedURL)
             self.finishWithResult(
                 analysisResult,
                 logs: completionLogs,
                 savedToLibrary: success
             )
         }
-
-        recordingManager.cleanup(url: exportedURL)
     }
 
     private func finishWithResult(_ result: AnalysisResult, logs: String, savedToLibrary: Bool) {
