@@ -1,14 +1,72 @@
 import SwiftUI
 import AVFoundation
-import PhotosUI
 
 struct ContentView: View {
-    @StateObject private var cameraManager = CameraManager()
-    @StateObject private var analysisService = VideoAnalysisService()
+    @State private var logMessages: [String] = ["Lancement de l'app UI..."]
+    @State private var safeBootSuccess = false
     
-    @State private var importedVideoItem: PhotosPickerItem? = nil
+    // Defer initialization to avoid init crashes
+    @State private var cameraManager: CameraManager?
+    @State private var analysisService: VideoAnalysisService?
     
     var body: some View {
+        ZStack {
+            Color.black.edgesIgnoringSafeArea(.all)
+            
+            if !safeBootSuccess {
+                VStack {
+                    Text("🚀 SpeedClimbCut (Safe Mode)")
+                        .foregroundColor(.white)
+                        .font(.headline)
+                        .padding()
+                    
+                    ScrollView {
+                        VStack(alignment: .leading) {
+                            ForEach(logMessages, id: \.self) { msg in
+                                Text(">> \(msg)").foregroundColor(.green).font(.caption)
+                            }
+                        }
+                    }
+                    .frame(height: 150)
+                    .background(Color.gray.opacity(0.3))
+                    
+                    Button("Initialiser la Caméra et les Services") {
+                        addLog("Bouton pressé: Initialisation...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            doSafeBoot()
+                        }
+                    }
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+            } else if let cameraManager = cameraManager, let analysisService = analysisService {
+                mainAppView(cameraManager: cameraManager, analysisService: analysisService)
+            }
+        }
+    }
+    
+    func doSafeBoot() {
+        addLog("Création du VideoAnalysisService...")
+        self.analysisService = VideoAnalysisService()
+        addLog("VideoAnalysisService OK.")
+        
+        addLog("Création du CameraManager...")
+        self.cameraManager = CameraManager()
+        addLog("CameraManager OK.")
+        
+        addLog("Permissions check en cours...")
+        self.safeBootSuccess = true
+    }
+    
+    func addLog(_ message: String) {
+        logMessages.append(message)
+    }
+    
+    // --- MAIN APP ---
+    @ViewBuilder
+    func mainAppView(cameraManager: CameraManager, analysisService: VideoAnalysisService) -> some View {
         ZStack {
             if analysisService.isAnalyzing {
                 VStack {
@@ -28,15 +86,17 @@ struct ContentView: View {
                 }
             } else {
                 CameraView(manager: cameraManager) { url in
-                    // On recording finished
                     analysisService.startAnalysis(videoURL: url)
                 }
                 
-                // Overlay Controls
                 VStack {
                     HStack {
                         Spacer()
-                        PhotosPicker(selection: $importedVideoItem, matching: .videos) {
+                        // Fallback temporaire pour ne pas crasher sur PhotosPickerItem
+                        Button(action: {
+                            // On désactive l'import pendant le test de la caméra
+                            // pour être sûr qu'aucun framework ne manque.
+                        }) {
                             Image(systemName: "photo")
                                 .font(.title)
                                 .padding()
@@ -64,16 +124,6 @@ struct ContentView: View {
                         }
                         .padding(.bottom, 30)
                     }
-                }
-            }
-        }
-        .onChange(of: importedVideoItem) { newItem in
-            Task {
-                if let data = try? await newItem?.loadTransferable(type: Data.self) {
-                    // Create temp file for analysis
-                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
-                    try? data.write(to: tempURL)
-                    analysisService.startAnalysis(videoURL: tempURL)
                 }
             }
         }
