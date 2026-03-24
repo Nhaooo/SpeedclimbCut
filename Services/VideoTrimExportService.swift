@@ -15,8 +15,14 @@ class VideoTrimExportService {
         
         // Ensure valid range
         let duration = asset.duration
-        let finalStart = CMTimeMaximum(start, .zero)
-        let finalEnd = CMTimeMinimum(end, duration)
+        var finalStart = CMTimeMaximum(start, .zero)
+        var finalEnd = CMTimeMinimum(end, duration)
+        
+        if finalStart >= finalEnd {
+            // Fallback to the whole video if the times are inverted or invalid
+            finalStart = .zero
+            finalEnd = duration
+        }
         
         let timeRange = CMTimeRange(start: finalStart, end: finalEnd)
         
