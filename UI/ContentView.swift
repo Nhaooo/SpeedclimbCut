@@ -48,16 +48,23 @@ struct ContentView: View {
     }
     
     func doSafeBoot() {
-        addLog("Création du VideoAnalysisService...")
-        self.analysisService = VideoAnalysisService()
-        addLog("VideoAnalysisService OK.")
-        
-        addLog("Création du CameraManager...")
-        self.cameraManager = CameraManager()
-        addLog("CameraManager OK.")
-        
-        addLog("Permissions check en cours...")
-        self.safeBootSuccess = true
+        addLog("▶️ Step 1: VideoAnalysisService...")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.analysisService = VideoAnalysisService()
+            addLog("✅ VideoService OK.")
+            
+            addLog("▶️ Step 2: CameraManager...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.cameraManager = CameraManager()
+                addLog("✅ CameraManager OK.")
+                
+                addLog("▶️ Step 3: Lancement Interface (CameraView)...")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    addLog("Activation UI...")
+                    self.safeBootSuccess = true
+                }
+            }
+        }
     }
     
     func addLog(_ message: String) {
