@@ -14,11 +14,17 @@ targets:
       - path: UI
     info:
       path: Info.plist
+      properties:
+        NSCameraUsageDescription: "L'application a besoin d'acceder a la camera pour enregistrer les ascensions."
+        NSPhotoLibraryUsageDescription: "L'application a besoin de lire vos videos pour les analyser."
+        NSPhotoLibraryAddUsageDescription: "L'application a besoin de sauvegarder la video decoupee."
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
     settings:
       CODE_SIGNING_REQUIRED: NO
       CODE_SIGNING_ALLOWED: NO
       INFOPLIST_FILE: Info.plist
       GENERATE_INFOPLIST_FILE: NO
-      INFOPLIST_KEY_NSCameraUsageDescription: "L'application a besoin d'acceder a la camera pour enregistrer les ascensions."
-      INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "L'application a besoin de lire vos videos pour les analyser."
-      INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "L'application a besoin de sauvegarder la video decoupee."

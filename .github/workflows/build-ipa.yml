@@ -18,6 +18,12 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate
 
+      - name: Verify Source Info.plist Privacy Keys
+        run: |
+          /usr/libexec/PlistBuddy -c "Print NSCameraUsageDescription" Info.plist
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryUsageDescription" Info.plist
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryAddUsageDescription" Info.plist
+
       - name: Build IPA (Unsigned)
         run: |
           xcodebuild clean build \
