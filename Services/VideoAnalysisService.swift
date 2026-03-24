@@ -1,6 +1,7 @@
 import Foundation
 import CoreMedia
 import Vision
+import AVFoundation
 
 class VideoAnalysisService: ObservableObject {
     @Published var isAnalyzing = false
