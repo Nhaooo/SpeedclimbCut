@@ -53,12 +53,18 @@ class VideoAnalysisService: ObservableObject {
         
         DispatchQueue.main.async { self.currentStatus = "Analyse Visuelle..." }
         
+        var videoOrientation: CGImagePropertyOrientation = .up
+        if let videoTrack = asset.tracks(withMediaType: .video).first {
+            videoOrientation = self.getVideoOrientation(from: videoTrack.preferredTransform)
+            logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
+        }
+        
         while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             
             if pts >= nextTargetTime {
                 guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: videoOrientation, options: [:])
                 do {
                     try handler.perform([request])
                     if let results = request.results {
@@ -123,6 +129,22 @@ class VideoAnalysisService: ObservableObject {
             self.lastResult = AnalysisResult(startTime: nil, topTime: nil, trimStart: nil, trimEnd: nil, targetConfidenceScore: 0, debugLogs: logs)
             self.isAnalyzing = false
         }
+    }
+    
+    private func getVideoOrientation(from transform: CGAffineTransform) -> CGImagePropertyOrientation {
+        if transform.a == 0 && transform.b == 1.0 && transform.c == -1.0 && transform.d == 0 {
+            return .right // Portrait
+        }
+        if transform.a == 0 && transform.b == -1.0 && transform.c == 1.0 && transform.d == 0 {
+            return .left // Portrait Upside Down
+        }
+        if transform.a == 1.0 && transform.b == 0 && transform.c == 0 && transform.d == 1.0 {
+            return .up // Landscape Right
+        }
+        if transform.a == -1.0 && transform.b == 0 && transform.c == 0 && transform.d == -1.0 {
+            return .down // Landscape Left
+        }
+        return .up
     }
     
     func reset() {
