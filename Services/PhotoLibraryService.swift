@@ -19,7 +19,10 @@ class PhotoLibraryService: ObservableObject {
             }
             
             PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = false // Do not move, just copy
+                let creationRequest = PHAssetCreationRequest.forAsset()
+                creationRequest.addResource(with: .video, fileURL: url, options: options)
             }) { saved, error in
                 if let error = error {
                     print("Erreur lors de la sauvegarde dans Photos: \(error.localizedDescription)")

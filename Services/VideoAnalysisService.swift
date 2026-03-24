@@ -8,6 +8,8 @@ class VideoAnalysisService: ObservableObject {
     @Published var currentStatus = ""
     @Published var lastResult: AnalysisResult?
     
+    private var logs = ""
+    
     private let trackingService = PersonTrackingService()
     private let eventDetector = ClimbEventDetector()
     private let trimExportService = VideoTrimExportService()
@@ -25,16 +27,17 @@ class VideoAnalysisService: ObservableObject {
     
     private func processVideo(url: URL) {
         var logs = "--- START TELEMETRY ---\n"
+        self.logs = logs
         let asset = AVAsset(url: url)
         
         guard let reader = try? AVAssetReader(asset: asset),
               let videoTrack = asset.tracks(withMediaType: .video).first else {
-            logs += "ERROR: Could not create AVAssetReader or find video track.\n"
-            finishWithError(logs: logs)
+            self.logs += "ERROR: Could not create AVAssetReader or find video track.\n"
+            finishWithError(logs: self.logs)
             return
         }
         
-        logs += "Asset loaded.\n"
+        self.logs += "Asset loaded.\n"
         
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
@@ -48,7 +51,7 @@ class VideoAnalysisService: ObservableObject {
         let frameInterval = CMTime(seconds: 1.0 / targetFPS, preferredTimescale: 600)
         var nextTargetTime = CMTime.zero
         
-        logs += "Starting Vision Request loop at 10 FPS...\n"
+        self.logs += "Starting Vision Request loop at 10 FPS...\n"
         let request = VNDetectHumanRectanglesRequest()
         
         DispatchQueue.main.async { self.currentStatus = "Analyse Visuelle..." }
@@ -56,7 +59,7 @@ class VideoAnalysisService: ObservableObject {
         var videoOrientation: CGImagePropertyOrientation = .up
         if let videoTrack = asset.tracks(withMediaType: .video).first {
             videoOrientation = self.getVideoOrientation(from: videoTrack.preferredTransform)
-            logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
+            self.logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
         }
         
         while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
@@ -71,11 +74,11 @@ class VideoAnalysisService: ObservableObject {
                         let boxes = results.map { self.transformRect($0.boundingBox, orientation: videoOrientation) }
                         trackingService.processFrame(cmTime: pts, boundingBoxes: boxes)
                         if framesProcessed % 30 == 0 {
-                            logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
+                            self.logs += "Frame \(framesProcessed) @ \(String(format: "%.2f", pts.seconds))s: \(boxes.count) humain(s).\n"
                         }
                     }
                 } catch {
-                    logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
+                    self.logs += "Vision Error on frame \(framesProcessed): \(error.localizedDescription)\n"
                 }
 
                 nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
@@ -87,19 +90,19 @@ class VideoAnalysisService: ObservableObject {
             }
         }
         
-        logs += "Extraction complete. \(framesProcessed) frames traitées.\n"
+        self.logs += "Extraction complete. \(framesProcessed) frames traitées.\n"
         
         guard let targetTrack = trackingService.getTargetTrack() else {
-            logs += "CRITICAL ERROR: trackingService.getTargetTrack() returned nil. Personne n'a bougé verticalement !\n"
-            finishWithError(logs: logs)
+            self.logs += "CRITICAL ERROR: trackingService.getTargetTrack() returned nil. Personne n'a bougé verticalement !\n"
+            finishWithError(logs: self.logs)
             return
         }
         
-        logs += "🎯 Target Track sélectionné : UUID \(targetTrack.id.uuidString.prefix(4)), Score vertical: \(String(format: "%.2f", targetTrack.totalScore))\n"
+        self.logs += "🎯 Target Track sélectionné : UUID \(targetTrack.id.uuidString.prefix(4)), Score vertical: \(String(format: "%.2f", targetTrack.totalScore))\n"
         let result = eventDetector.analyzeTrack(targetTrack)
         
         if result.isValid, let start = result.trimStart, let end = result.trimEnd {
-            logs += "✅ SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
+            self.logs += "✅ SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
             
             DispatchQueue.main.async { self.currentStatus = "Découpage (Trim)..." }
             trimExportService.trimVideo(url: url, start: start, end: end) { [weak self] exportedURL, error in
@@ -107,25 +110,29 @@ class VideoAnalysisService: ObservableObject {
                 
                 if let exportedURL = exportedURL {
                     DispatchQueue.main.async { self.currentStatus = "Sauvegarde Galerie..." }
-                    self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, _ in
-                        // Retarder la suppression du fichier temporaire pour éviter un conflit avec Photos
-                        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) {
-                            try? FileManager.default.removeItem(at: exportedURL)
-                        }
-                        DispatchQueue.main.async {
-                            self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: logs)
-                            self.isAnalyzing = false
+                    
+                    // Delay slightly to ensure AVAssetExportSession has completely released the file lock
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.photoLibraryService.saveVideoToLibrary(url: exportedURL) { success, error in
+                            if let error = error {
+                                self.logs += "ERROR Galerie: \(error.localizedDescription)\n"
+                            }
+                            
+                            DispatchQueue.main.async {
+                                self.lastResult = AnalysisResult(startTime: result.startTime, topTime: result.topTime, trimStart: result.trimStart, trimEnd: result.trimEnd, targetConfidenceScore: result.targetConfidenceScore, debugLogs: self.logs)
+                                self.isAnalyzing = false
+                            }
                         }
                     }
                 } else {
-                    logs += "ERROR: trimVideo exportedURL est nil.\n"
-                    self.finishWithError(logs: logs)
+                    self.logs += "ERROR: trimVideo exportedURL est nil.\n"
+                    self.finishWithError(logs: self.logs)
                 }
             }
         } else {
-            logs += "CRITICAL ERROR: EventDetector n'a pas validé le Start ou le Top.\n"
-            logs += "Event Details - start: \(result.startTime?.seconds ?? -1), top: \(result.topTime?.seconds ?? -1)\n"
-            finishWithError(logs: logs)
+            self.logs += "CRITICAL ERROR: EventDetector n'a pas validé le Start ou le Top.\n"
+            self.logs += "Event Details - start: \(result.startTime?.seconds ?? -1), top: \(result.topTime?.seconds ?? -1)\n"
+            finishWithError(logs: self.logs)
         }
     }
     
