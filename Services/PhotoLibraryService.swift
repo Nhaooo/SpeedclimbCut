@@ -1,7 +1,11 @@
 import Foundation
 import Photos
+import UIKit
 
-final class PhotoLibraryService {
+final class PhotoLibraryService: NSObject {
+    private var completionHandler: ((Bool, Error?) -> Void)?
+    private var pendingCleanupURL: URL?
+
     func saveVideoToLibrary(url: URL, completion: @escaping (Bool, Error?) -> Void) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             DispatchQueue.main.async {
@@ -10,16 +14,42 @@ final class PhotoLibraryService {
             return
         }
 
-        let performSave = {
-            let creationOptions = PHAssetResourceCreationOptions()
-            creationOptions.shouldMoveFile = false
+        completionHandler = completion
 
-            PHPhotoLibrary.shared().performChanges({
-                let request = PHAssetCreationRequest.forAsset()
-                request.addResource(with: .video, fileURL: url, options: creationOptions)
-            }) { success, error in
+        let copyURL = FileManager.default.temporaryDirectory.appendingPathComponent("gallery_save_\(UUID().uuidString).mp4")
+        try? FileManager.default.removeItem(at: copyURL)
+
+        do {
+            try FileManager.default.copyItem(at: url, to: copyURL)
+            pendingCleanupURL = copyURL
+        } catch {
+            DispatchQueue.main.async {
+                completion(false, error)
+            }
+            completionHandler = nil
+            return
+        }
+
+        let performSave: () -> Void = { [weak self] in
+            guard let self else { return }
+            guard let saveURL = self.pendingCleanupURL else {
                 DispatchQueue.main.async {
-                    completion(success, error)
+                    self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 500, userInfo: [NSLocalizedDescriptionKey: "Fichier temporaire introuvable"]))
+                    self.finishSave()
+                }
+                return
+            }
+
+            DispatchQueue.main.async {
+                if UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(saveURL.path) {
+                    UISaveVideoAtPathToSavedPhotosAlbum(
+                        saveURL.path,
+                        self,
+                        #selector(self.video(_:didFinishSavingWithError:contextInfo:)),
+                        nil
+                    )
+                } else {
+                    self.saveWithPhotoKit(url: saveURL)
                 }
             }
         }
@@ -30,7 +60,8 @@ final class PhotoLibraryService {
                     performSave()
                 } else {
                     DispatchQueue.main.async {
-                        completion(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
+                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
+                        self.finishSave()
                     }
                 }
             }
@@ -40,10 +71,38 @@ final class PhotoLibraryService {
                     performSave()
                 } else {
                     DispatchQueue.main.async {
-                        completion(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
+                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
+                        self.finishSave()
                     }
                 }
             }
         }
+    }
+
+    private func saveWithPhotoKit(url: URL) {
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+        }) { success, error in
+            DispatchQueue.main.async {
+                self.completionHandler?(success, error)
+                self.finishSave()
+            }
+        }
+    }
+
+    @objc private func video(_ videoPath: String, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
+        DispatchQueue.main.async {
+            self.completionHandler?(error == nil, error)
+            self.finishSave()
+        }
+    }
+
+    private func finishSave() {
+        if let url = pendingCleanupURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        pendingCleanupURL = nil
+        completionHandler = nil
     }
 }
