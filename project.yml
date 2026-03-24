@@ -1,0 +1,17 @@
+name: SpeedClimbCut
+options:
+  bundleIdPrefix: com.noahj
+targets:
+  SpeedClimbCut:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: .
+        excludes:
+          - "**/*.py"
+          - "project.yml"
+          - ".github"
+    settings:
+      CODE_SIGNING_REQUIRED: NO
+      CODE_SIGNING_ALLOWED: NO

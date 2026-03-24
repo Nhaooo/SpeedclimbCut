@@ -1,0 +1,43 @@
+name: Build iOS App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build IPA (Unsigned)
+        run: |
+          xcodebuild clean build \
+            -project SpeedClimbCut.xcodeproj \
+            -scheme SpeedClimbCut \
+            -configuration Release \
+            -sdk iphoneos \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CONFIGURATION_BUILD_DIR=${{ github.workspace }}/build
+
+      - name: Create Payload
+        run: |
+          mkdir -p Payload
+          mv build/SpeedClimbCut.app Payload/
+          zip -r SpeedClimbCut.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v3
+        with:
+          name: SpeedClimbCut-Unsigned-IPA
+          path: SpeedClimbCut.ipa
