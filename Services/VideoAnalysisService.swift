@@ -188,7 +188,7 @@ final class VideoAnalysisService: ObservableObject {
                 return
             }
 
-            logs += "Target track selected: UUID \(targetTrack.id.uuidString.prefix(4)), score vertical: \(String(format: "%.2f", targetTrack.totalScore))\n"
+            logs += "Target track selected: UUID \(targetTrack.id.uuidString.prefix(4)), score: \(String(format: "%.2f", targetTrack.totalScore)), points: \(targetTrack.points.count), peakY: \(String(format: "%.2f", targetTrack.peakHeight)), lastY: \(String(format: "%.2f", targetTrack.lastHeight))\n"
             let result = self.eventDetector.analyzeTrack(targetTrack)
 
             guard result.isValid, let start = result.trimStart, let end = result.trimEnd else {
