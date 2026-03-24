@@ -13,7 +13,7 @@ class ClimbEventDetector {
         var consecutiveStableTopFrames = 0
         
         guard let firstPoint = track.points.first else {
-            return AnalysisResult(startTime: nil, topTime: nil, trimStart: nil, trimEnd: nil, targetConfidenceScore: 0, debugLogs: "", exportedURL: nil)
+            return AnalysisResult(startTime: nil, topTime: nil, trimStart: nil, trimEnd: nil, targetConfidenceScore: 0, debugLogs: "", exportedURL: nil, savedToLibrary: false)
         }
         
         var lastY = firstPoint.y
@@ -80,7 +80,8 @@ class ClimbEventDetector {
             trimEnd: trimEnd,
             targetConfidenceScore: track.totalScore,
             debugLogs: "",
-            exportedURL: nil
+            exportedURL: nil,
+            savedToLibrary: false
         )
     }
 }

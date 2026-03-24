@@ -1,26 +1,26 @@
-import SwiftUI
-import AVFoundation
 import PhotosUI
+import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var analysisService = VideoAnalysisService()
-    
-    @State private var importedVideoItem: PhotosPickerItem? = nil
+
+    @State private var importedVideoItem: PhotosPickerItem?
     @State private var showCamera = false
-    
+
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
-            
+
             if analysisService.isAnalyzing {
-                VStack {
+                VStack(spacing: 12) {
                     ProgressView("Analyse en cours...")
                         .padding()
                         .background(Color.black.opacity(0.8))
                         .cornerRadius(10)
                         .foregroundColor(.white)
-                    
+
                     Text(analysisService.currentStatus)
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -34,7 +34,7 @@ struct ContentView: View {
                     showCamera = false
                     analysisService.startAnalysis(videoURL: url)
                 }
-                
+
                 VStack {
                     HStack {
                         Button(action: { showCamera = false }) {
@@ -45,10 +45,12 @@ struct ContentView: View {
                                 .foregroundColor(.black)
                         }
                         .padding()
+
                         Spacer()
                     }
+
                     Spacer()
-                    
+
                     if cameraManager.isRecording {
                         Button(action: { cameraManager.stopRecording() }) {
                             Circle()
@@ -68,21 +70,20 @@ struct ContentView: View {
                     }
                 }
             } else {
-                // Menu d'Accueil (Dashboard)
                 VStack(spacing: 30) {
                     Image(systemName: "timer")
                         .font(.system(size: 80))
                         .foregroundColor(.green)
-                    
+
                     Text("SpeedClimbCut")
-                        .font(.largeTitle).bold()
+                        .font(.largeTitle.bold())
                         .foregroundColor(.white)
                         .padding(.bottom, 20)
-                    
+
                     PhotosPicker(selection: $importedVideoItem, matching: .videos) {
                         HStack {
                             Image(systemName: "photo.stack")
-                            Text("Importer une vidéo")
+                            Text("Importer une video")
                         }
                         .font(.headline)
                         .padding()
@@ -91,13 +92,13 @@ struct ContentView: View {
                         .foregroundColor(.white)
                         .cornerRadius(15)
                     }
-                    
+
                     Button(action: {
                         showCamera = true
                     }) {
                         HStack {
                             Image(systemName: "camera")
-                            Text("Caméra (Expérimental)")
+                            Text("Camera (experimental)")
                         }
                         .font(.headline)
                         .padding()
@@ -111,40 +112,69 @@ struct ContentView: View {
             }
         }
         .onChange(of: importedVideoItem) { newItem in
-            Task {
-                if let data = try? await newItem?.loadTransferable(type: Data.self) {
-                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
-                    try? data.write(to: tempURL)
-                    analysisService.startAnalysis(videoURL: tempURL)
-                }
-            }
+            handleImportedVideoSelection(newItem)
         }
         .edgesIgnoringSafeArea(.all)
+    }
+
+    private func handleImportedVideoSelection(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+
+        analysisService.prepareImportedVideoLoad()
+
+        Task {
+            do {
+                guard let importedVideo = try await item.loadTransferable(type: ImportedVideo.self) else {
+                    analysisService.presentImportFailure(message: "Le selecteur n'a retourne aucune video.")
+                    await MainActor.run {
+                        importedVideoItem = nil
+                    }
+                    return
+                }
+
+                analysisService.startAnalysis(videoURL: importedVideo.url)
+            } catch {
+                analysisService.presentImportFailure(error)
+            }
+
+            await MainActor.run {
+                importedVideoItem = nil
+            }
+        }
     }
 }
 
 struct AnalysisResultView: View {
     let result: AnalysisResult
     let onDismiss: () -> Void
-    
+
     var body: some View {
         VStack(spacing: 20) {
-            Text(result.isValid ? "✅ Analyse Terminée" : "❌ Échec de l'analyse")
-                .font(.title).bold()
-            
+            Text(result.isValid ? "Analyse terminee" : "Echec de l'analyse")
+                .font(.title.bold())
+
             if result.isValid {
                 Text("Start: +\(String(format: "%.2fs", result.startTime?.seconds ?? 0))")
                 Text("Top: +\(String(format: "%.2fs", result.topTime?.seconds ?? 0))")
-                Text("Vidéo coupée copiée dans tes Photos !")
-                    .foregroundColor(.green)
-                    .multilineTextAlignment(.center)
+
+                if result.savedToLibrary {
+                    Text("Video decoupee sauvegardee dans Photos.")
+                        .foregroundColor(.green)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("Decoupage reussi, mais la sauvegarde Photos a echoue. Consulte les logs.")
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                }
             }
-            
+
             VStack(alignment: .leading) {
                 HStack {
                     Text("Telemetry Logs:")
-                        .font(.caption).bold()
+                        .font(.caption.bold())
+
                     Spacer()
+
                     Button(action: {
                         UIPasteboard.general.string = result.debugLogs
                     }) {
@@ -156,7 +186,7 @@ struct AnalysisResultView: View {
                     .background(Color.gray.opacity(0.2))
                     .cornerRadius(5)
                 }
-                
+
                 ScrollView {
                     Text(result.debugLogs)
                         .font(.system(size: 10, design: .monospaced))
@@ -168,7 +198,7 @@ struct AnalysisResultView: View {
                 .background(Color.black.opacity(0.05))
                 .cornerRadius(8)
             }
-            
+
             Button("Retour", action: onDismiss)
                 .padding()
                 .frame(maxWidth: .infinity)

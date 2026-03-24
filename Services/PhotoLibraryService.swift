@@ -2,10 +2,10 @@ import Foundation
 import Photos
 import UIKit
 
-class PhotoLibraryService: NSObject, ObservableObject {
+final class PhotoLibraryService: NSObject, ObservableObject {
     private var completionHandler: ((Bool, Error?) -> Void)?
     private var pendingCleanupURL: URL?
-    
+
     func saveVideoToLibrary(url: URL, completion: @escaping (Bool, Error?) -> Void) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             DispatchQueue.main.async {
@@ -13,11 +13,12 @@ class PhotoLibraryService: NSObject, ObservableObject {
             }
             return
         }
-        
-        self.completionHandler = completion
-        
+
+        completionHandler = completion
+
         let copyURL = FileManager.default.temporaryDirectory.appendingPathComponent("gallery_save_\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: copyURL)
+
         do {
             try FileManager.default.copyItem(at: url, to: copyURL)
             pendingCleanupURL = copyURL
@@ -25,10 +26,10 @@ class PhotoLibraryService: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 completion(false, error)
             }
-            self.completionHandler = nil
+            completionHandler = nil
             return
         }
-        
+
         let performSave: () -> Void = { [weak self] in
             guard let self else { return }
             guard let saveURL = self.pendingCleanupURL else {
@@ -38,6 +39,7 @@ class PhotoLibraryService: NSObject, ObservableObject {
                 }
                 return
             }
+
             DispatchQueue.main.async {
                 if UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(saveURL.path) {
                     UISaveVideoAtPathToSavedPhotosAlbum(saveURL.path, self, #selector(self.video(_:didFinishSavingWithError:contextInfo:)), nil)
@@ -46,14 +48,14 @@ class PhotoLibraryService: NSObject, ObservableObject {
                 }
             }
         }
-        
+
         if #available(iOS 14, *) {
             PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
                 if status == .authorized || status == .limited {
                     performSave()
                 } else {
                     DispatchQueue.main.async {
-                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusée"]))
+                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
                         self.finishSave()
                     }
                 }
@@ -64,14 +66,14 @@ class PhotoLibraryService: NSObject, ObservableObject {
                     performSave()
                 } else {
                     DispatchQueue.main.async {
-                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusée"]))
+                        self.completionHandler?(false, NSError(domain: "PhotoLibraryAccess", code: 401, userInfo: [NSLocalizedDescriptionKey: "Permission galerie refusee"]))
                         self.finishSave()
                     }
                 }
             }
         }
     }
-    
+
     private func saveWithPhotoKit(url: URL) {
         PHPhotoLibrary.shared().performChanges({
             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
@@ -82,18 +84,19 @@ class PhotoLibraryService: NSObject, ObservableObject {
             }
         }
     }
-    
-    @objc func video(_ videoPath: String, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
+
+    @objc private func video(_ videoPath: String, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
         DispatchQueue.main.async {
             self.completionHandler?(error == nil, error)
             self.finishSave()
         }
     }
-    
+
     private func finishSave() {
         if let url = pendingCleanupURL {
             try? FileManager.default.removeItem(at: url)
         }
+
         pendingCleanupURL = nil
         completionHandler = nil
     }

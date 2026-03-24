@@ -27,11 +27,11 @@
         <string>UIInterfaceOrientationPortrait</string>
     </array>
     <key>NSCameraUsageDescription</key>
-    <string>L'application a besoin d'accéder à la caméra pour enregistrer les ascensions.</string>
+    <string>L'application a besoin d'acceder a la camera pour enregistrer les ascensions.</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>L'application a besoin de lire vos vidéos pour les analyser.</string>
+    <string>L'application a besoin de lire vos videos pour les analyser.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>L'application a besoin de sauvegarder la vidéo découpée.</string>
+    <string>L'application a besoin de sauvegarder la video decoupee.</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
