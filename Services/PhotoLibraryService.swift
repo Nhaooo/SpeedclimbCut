@@ -16,7 +16,10 @@ final class PhotoLibraryService: NSObject {
 
         completionHandler = completion
 
-        let copyURL = FileManager.default.temporaryDirectory.appendingPathComponent("gallery_save_\(UUID().uuidString).mp4")
+        let fileExtension = url.pathExtension.isEmpty ? "mov" : url.pathExtension
+        let copyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gallery_save_\(UUID().uuidString)")
+            .appendingPathExtension(fileExtension)
         try? FileManager.default.removeItem(at: copyURL)
 
         do {
