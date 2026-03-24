@@ -1,80 +1,18 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
 
 struct ContentView: View {
-    @State private var logMessages: [String] = ["Lancement de l'app UI..."]
-    @State private var safeBootSuccess = false
+    @StateObject private var cameraManager = CameraManager()
+    @StateObject private var analysisService = VideoAnalysisService()
     
-    // Defer initialization to avoid init crashes
-    @State private var cameraManager: CameraManager?
-    @State private var analysisService: VideoAnalysisService?
+    @State private var importedVideoItem: PhotosPickerItem? = nil
+    @State private var showCamera = false
     
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            if !safeBootSuccess {
-                VStack {
-                    Text("🚀 SpeedClimbCut (Safe Mode)")
-                        .foregroundColor(.white)
-                        .font(.headline)
-                        .padding()
-                    
-                    ScrollView {
-                        VStack(alignment: .leading) {
-                            ForEach(logMessages, id: \.self) { msg in
-                                Text(">> \(msg)").foregroundColor(.green).font(.caption)
-                            }
-                        }
-                    }
-                    .frame(height: 150)
-                    .background(Color.gray.opacity(0.3))
-                    
-                    Button("Initialiser la Caméra et les Services") {
-                        addLog("Bouton pressé: Initialisation...")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            doSafeBoot()
-                        }
-                    }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                }
-            } else if let cameraManager = cameraManager, let analysisService = analysisService {
-                mainAppView(cameraManager: cameraManager, analysisService: analysisService)
-            }
-        }
-    }
-    
-    func doSafeBoot() {
-        addLog("▶️ Step 1: VideoAnalysisService...")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.analysisService = VideoAnalysisService()
-            addLog("✅ VideoService OK.")
-            
-            addLog("▶️ Step 2: CameraManager...")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.cameraManager = CameraManager()
-                addLog("✅ CameraManager OK.")
-                
-                addLog("▶️ Step 3: Lancement Interface (CameraView)...")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    addLog("Activation UI...")
-                    self.safeBootSuccess = true
-                }
-            }
-        }
-    }
-    
-    func addLog(_ message: String) {
-        logMessages.append(message)
-    }
-    
-    // --- MAIN APP ---
-    @ViewBuilder
-    func mainAppView(cameraManager: CameraManager, analysisService: VideoAnalysisService) -> some View {
-        ZStack {
             if analysisService.isAnalyzing {
                 VStack {
                     ProgressView("Analyse en cours...")
@@ -91,26 +29,23 @@ struct ContentView: View {
                 AnalysisResultView(result: result) {
                     analysisService.reset()
                 }
-            } else {
+            } else if showCamera {
                 CameraView(manager: cameraManager) { url in
+                    showCamera = false
                     analysisService.startAnalysis(videoURL: url)
                 }
                 
                 VStack {
                     HStack {
-                        Spacer()
-                        // Fallback temporaire pour ne pas crasher sur PhotosPickerItem
-                        Button(action: {
-                            // On désactive l'import pendant le test de la caméra
-                            // pour être sûr qu'aucun framework ne manque.
-                        }) {
-                            Image(systemName: "photo")
+                        Button(action: { showCamera = false }) {
+                            Image(systemName: "xmark")
                                 .font(.title)
                                 .padding()
                                 .background(Circle().fill(Color.white.opacity(0.8)))
                                 .foregroundColor(.black)
                         }
                         .padding()
+                        Spacer()
                     }
                     Spacer()
                     
@@ -132,6 +67,56 @@ struct ContentView: View {
                         .padding(.bottom, 30)
                     }
                 }
+            } else {
+                // Menu d'Accueil (Dashboard)
+                VStack(spacing: 30) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 80))
+                        .foregroundColor(.green)
+                    
+                    Text("SpeedClimbCut")
+                        .font(.largeTitle).bold()
+                        .foregroundColor(.white)
+                        .padding(.bottom, 20)
+                    
+                    PhotosPicker(selection: $importedVideoItem, matching: .videos) {
+                        HStack {
+                            Image(systemName: "photo.stack")
+                            Text("Importer une vidéo")
+                        }
+                        .font(.headline)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(15)
+                    }
+                    
+                    Button(action: {
+                        showCamera = true
+                    }) {
+                        HStack {
+                            Image(systemName: "camera")
+                            Text("Caméra (Expérimental)")
+                        }
+                        .font(.headline)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(15)
+                    }
+                }
+                .padding(40)
+            }
+        }
+        .onChange(of: importedVideoItem) { newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
+                    try? data.write(to: tempURL)
+                    analysisService.startAnalysis(videoURL: tempURL)
+                }
             }
         }
         .edgesIgnoringSafeArea(.all)
@@ -144,24 +129,23 @@ struct AnalysisResultView: View {
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("Analyse Terminée")
+            Text("✅ Analyse Terminée")
                 .font(.title).bold()
             
             if result.isValid {
-                Text("Cible identifiée (Score: \(String(format: "%.2f", result.targetConfidenceScore)))")
-                Text("Départ détecté: +\(String(format: "%.2fs", result.startTime?.seconds ?? 0))")
-                Text("Top détecté: +\(String(format: "%.2fs", result.topTime?.seconds ?? 0))")
+                Text("Start: +\(String(format: "%.2fs", result.startTime?.seconds ?? 0))")
+                Text("Top: +\(String(format: "%.2fs", result.topTime?.seconds ?? 0))")
                 
-                Text("Export final généré et sauvegardé dans Photos.")
+                Text("Vidéo coupée copiée dans tes Photos !")
                     .foregroundColor(.green)
                     .multilineTextAlignment(.center)
             } else {
                 Text("Échec de l'analyse.")
                     .foregroundColor(.red)
-                Text("Aucun grimpeur trouvé ou mouvement insertain.")
+                Text("L'algorithme a perdu la piste.")
             }
             
-            Button("Nouvelle vidéo", action: onDismiss)
+            Button("Retour", action: onDismiss)
                 .padding()
                 .background(Color.blue)
                 .foregroundColor(.white)
