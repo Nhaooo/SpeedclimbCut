@@ -42,7 +42,7 @@ class ClimbEventDetector {
                 }
                 
             case .nearTop:
-                if abs(dy) < 0.005 || dy < 0 {
+                if abs(dy) < AppConfig.topStabilizationThreshold || dy < 0 {
                     // Stagnating or falling = reached the buzzer
                     consecutiveStableTopFrames += 1
                     if consecutiveStableTopFrames >= AppConfig.topStabilizationFrames {

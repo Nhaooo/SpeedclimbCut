@@ -13,12 +13,12 @@ class PersonTrackingService {
         for (id, track) in tracks {
             guard let lastPoint = track.points.last else { continue }
             
-            // Find closest box
+            // Find closest box using lane-tracking logic
             if let closestIndex = unassignedBoxes.firstIndex(where: { 
-                distance(rect1: $0, rect2: lastPoint.bbox) < 0.2 // Max allowed movement per frame
+                isSamePerson(last: lastPoint.bbox, current: $0)
             }) {
                 let matchedBox = unassignedBoxes.remove(at: closestIndex)
-                let newPoint = TrackPoint(time: cmTime, y: 1.0 - matchedBox.midY, bbox: matchedBox) // Vision 0 is bottom
+                let newPoint = TrackPoint(time: cmTime, y: matchedBox.midY, bbox: matchedBox) // Vision: 0 is bottom, 1 is top
                 tracks[id]?.points.append(newPoint)
             }
         }
@@ -26,15 +26,20 @@ class PersonTrackingService {
         // Create new tracks for remaining boxes
         for box in unassignedBoxes {
             let id = UUID()
-            let newPoint = TrackPoint(time: cmTime, y: 1.0 - box.midY, bbox: box)
+            let newPoint = TrackPoint(time: cmTime, y: box.midY, bbox: box)
             tracks[id] = PersonTrack(id: id, points: [newPoint])
         }
     }
     
-    private func distance(rect1: CGRect, rect2: CGRect) -> CGFloat {
-        let dx = rect1.midX - rect2.midX
-        let dy = rect1.midY - rect2.midY
-        return sqrt(dx*dx + dy*dy)
+    private func isSamePerson(last: CGRect, current: CGRect) -> Bool {
+        // Speed climbing is vertical. X rarely changes. Y moves upward.
+        let dx = abs(current.midX - last.midX)
+        let dy = current.midY - last.midY // Positive = moving UP toward buzzer
+        
+        // As long as they stay in the same horizontal lane (dx < 0.2)
+        // And they don't teleport insanely far down due to bugs (dy > -0.15)
+        // And we allow climbing very fast even with detection gaps (dy up to 0.70)
+        return dx < 0.2 && dy > -0.15 && dy < 0.70
     }
     
     func getTargetTrack() -> PersonTrack? {
