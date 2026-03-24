@@ -45,15 +45,14 @@ jobs:
 
       - name: Create Payload
         run: |
+          rm -rf Payload SpeedClimbCut.ipa ipa_check
           mkdir -p Payload
           cp -R build/SpeedClimbCut.app Payload/
-          cd Payload
-          zip -r ../SpeedClimbCut.ipa SpeedClimbCut.app
+          zip -r SpeedClimbCut.ipa Payload
 
       - name: Verify IPA Contents
         run: |
           unzip -l SpeedClimbCut.ipa
-          rm -rf ipa_check
           mkdir -p ipa_check
           unzip -q SpeedClimbCut.ipa -d ipa_check
           APP_PLIST="${{ github.workspace }}/ipa_check/Payload/SpeedClimbCut.app/Info.plist"
