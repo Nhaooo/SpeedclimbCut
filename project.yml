@@ -7,11 +7,11 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
-      - path: .
-        excludes:
-          - "**/*.py"
-          - "project.yml"
-          - ".github"
+      - path: App
+      - path: Managers
+      - path: Models
+      - path: Services
+      - path: UI
     info:
       path: Info.plist
     settings:
@@ -19,3 +19,6 @@ targets:
       CODE_SIGNING_ALLOWED: NO
       INFOPLIST_FILE: Info.plist
       GENERATE_INFOPLIST_FILE: NO
+      INFOPLIST_KEY_NSCameraUsageDescription: "L'application a besoin d'acceder a la camera pour enregistrer les ascensions."
+      INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "L'application a besoin de lire vos videos pour les analyser."
+      INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "L'application a besoin de sauvegarder la video decoupee."

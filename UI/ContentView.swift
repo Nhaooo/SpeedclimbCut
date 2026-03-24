@@ -8,6 +8,9 @@ struct ContentView: View {
 
     @State private var importedVideoItem: PhotosPickerItem?
     @State private var showCamera = false
+    @State private var hasRequestedPhotoPermission = false
+
+    private let photoLibraryService = PhotoLibraryService()
 
     var body: some View {
         ZStack {
@@ -113,6 +116,11 @@ struct ContentView: View {
         }
         .onChange(of: importedVideoItem) { newItem in
             handleImportedVideoSelection(newItem)
+        }
+        .onAppear {
+            guard !hasRequestedPhotoPermission else { return }
+            hasRequestedPhotoPermission = true
+            photoLibraryService.requestAddPermission()
         }
         .edgesIgnoringSafeArea(.all)
     }

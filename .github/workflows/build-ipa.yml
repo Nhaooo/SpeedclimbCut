@@ -30,11 +30,30 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CONFIGURATION_BUILD_DIR=${{ github.workspace }}/build
 
+      - name: Verify Built Info.plist Privacy Keys
+        run: |
+          APP_PLIST="${{ github.workspace }}/build/SpeedClimbCut.app/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print NSCameraUsageDescription" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryUsageDescription" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryAddUsageDescription" "$APP_PLIST"
+
       - name: Create Payload
         run: |
           mkdir -p Payload
-          mv build/SpeedClimbCut.app Payload/
-          zip -r SpeedClimbCut.ipa Payload
+          cp -R build/SpeedClimbCut.app Payload/
+          cd Payload
+          zip -r ../SpeedClimbCut.ipa SpeedClimbCut.app
+
+      - name: Verify IPA Contents
+        run: |
+          unzip -l SpeedClimbCut.ipa
+          rm -rf ipa_check
+          mkdir -p ipa_check
+          unzip -q SpeedClimbCut.ipa -d ipa_check
+          APP_PLIST="${{ github.workspace }}/ipa_check/Payload/SpeedClimbCut.app/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print NSCameraUsageDescription" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryUsageDescription" "$APP_PLIST"
+          /usr/libexec/PlistBuddy -c "Print NSPhotoLibraryAddUsageDescription" "$APP_PLIST"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

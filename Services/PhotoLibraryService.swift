@@ -6,6 +6,22 @@ final class PhotoLibraryService: NSObject {
     private var completionHandler: ((Bool, Error?) -> Void)?
     private var pendingCleanupURL: URL?
 
+    func requestAddPermission(completion: ((PHAuthorizationStatus) -> Void)? = nil) {
+        if #available(iOS 14, *) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                DispatchQueue.main.async {
+                    completion?(status)
+                }
+            }
+        } else {
+            PHPhotoLibrary.requestAuthorization { status in
+                DispatchQueue.main.async {
+                    completion?(status)
+                }
+            }
+        }
+    }
+
     func saveVideoToLibrary(url: URL, completion: @escaping (Bool, Error?) -> Void) {
         guard FileManager.default.fileExists(atPath: url.path) else {
             DispatchQueue.main.async {
