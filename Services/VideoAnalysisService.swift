@@ -1,14 +1,13 @@
 import AVFoundation
 import Foundation
-import Vision
+import ImageIO
 
 final class VideoAnalysisService: ObservableObject {
     @Published var isAnalyzing = false
     @Published var currentStatus = ""
     @Published var lastResult: AnalysisResult?
 
-    private let hybridTrackingService = HybridVisionTrackingService()
-    private let eventDetector = ClimbEventDetector()
+    private let motionAnalysisService = MotionHybridAnalysisService()
     private let trimExportService = VideoTrimExportService()
     private let photoLibraryService = PhotoLibraryService()
     private let recordingManager = RecordingManager.shared
@@ -50,7 +49,7 @@ final class VideoAnalysisService: ObservableObject {
         DispatchQueue.main.async {
             self.lastResult = nil
             self.isAnalyzing = true
-            self.currentStatus = "Initialisation pipeline Vision..."
+            self.currentStatus = "Initialisation analyse rapide..."
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -89,66 +88,31 @@ final class VideoAnalysisService: ObservableObject {
                 logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
             }
 
-            await self.updateStatus("Suivi de la voie...")
+            await self.updateStatus("Analyse motion du mur...")
 
-            let trackingAnalysis: HybridVisionTrackingService.TrackingAnalysis
+            let motionAnalysis: MotionHybridAnalysisService.Analysis
             do {
-                guard let analysis = try await self.hybridTrackingService.analyze(
+                motionAnalysis = try await self.motionAnalysisService.analyze(
                     asset: asset,
                     videoTrack: videoTrack,
                     orientation: videoOrientation
-                ) else {
-                    logs += "CRITICAL ERROR: Hybrid tracker returned nil.\n"
-                    self.finishWithError(logs: logs, cleanupURLs: [url])
-                    return
-                }
-
-                trackingAnalysis = analysis
+                )
             } catch {
-                logs += "CRITICAL ERROR: Hybrid tracker failed. \(error.localizedDescription)\n"
+                logs += "CRITICAL ERROR: Motion analysis failed. \(error.localizedDescription)\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }
 
-            logs += trackingAnalysis.debugLogs
-            logs += "Hybrid target track: score \(String(format: "%.2f", trackingAnalysis.track.totalScore)), points: \(trackingAnalysis.track.points.count), peakY: \(String(format: "%.2f", trackingAnalysis.track.peakHeight)), lastY: \(String(format: "%.2f", trackingAnalysis.track.lastHeight))\n"
-
-            let roughResult = self.eventDetector.analyzeTrack(trackingAnalysis.track)
-            logs += "Rough events -> start: \(roughResult.startTime?.seconds ?? -1), top: \(roughResult.topTime?.seconds ?? -1)\n"
-
-            await self.updateStatus("Raffinement haut du corps...")
-
-            let refinementResult: HybridVisionTrackingService.RefinementResult
-            do {
-                refinementResult = try await self.hybridTrackingService.refineEventTimes(
-                    asset: asset,
-                    videoTrack: videoTrack,
-                    orientation: videoOrientation,
-                    baseTrack: trackingAnalysis.track,
-                    roughResult: roughResult
-                )
-            } catch {
-                logs += "WARNING: Body pose refinement failed. \(error.localizedDescription)\n"
-                refinementResult = HybridVisionTrackingService.RefinementResult(
-                    startTime: roughResult.startTime,
-                    topTime: roughResult.topTime,
-                    debugLogs: ""
-                )
-            }
-
-            logs += refinementResult.debugLogs
-
-            let finalStartTime = refinementResult.startTime ?? roughResult.startTime
-            let finalTopTime = refinementResult.topTime ?? roughResult.topTime
+            logs += motionAnalysis.debugLogs
             let finalResult = self.makeFinalResult(
-                startTime: finalStartTime,
-                topTime: finalTopTime,
-                confidenceScore: trackingAnalysis.track.totalScore
+                startTime: motionAnalysis.startTime,
+                topTime: motionAnalysis.topTime,
+                confidenceScore: motionAnalysis.confidenceScore
             )
 
             guard finalResult.isValid, let start = finalResult.trimStart, let end = finalResult.trimEnd else {
-                logs += "CRITICAL ERROR: EventDetector could not validate Start or Top.\n"
-                logs += "Event details - start: \(finalStartTime?.seconds ?? -1), top: \(finalTopTime?.seconds ?? -1)\n"
+                logs += "CRITICAL ERROR: Motion analysis could not validate Start or Top.\n"
+                logs += "Event details - method: \(motionAnalysis.method), start: \(motionAnalysis.startTime?.seconds ?? -1), top: \(motionAnalysis.topTime?.seconds ?? -1)\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }

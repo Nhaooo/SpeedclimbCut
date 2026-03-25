@@ -5,6 +5,39 @@ struct AppConfig {
     static let analysisFPS: Int = 15
     static let maxVideoDimension: CGFloat = 80.0
 
+    static let motionAnalysisFPS: Double = 8.0
+    static let motionGridWidth: Int = 10
+    static let motionGridHeight: Int = 20
+    static let motionThreshold: Int = 20
+    static let motionLaneStartColumn: Int = 3
+    static let motionLaneEndColumn: Int = 7
+
+    static let motionBaselineSmoothWindow: Int = 8
+    static let motionBaselineStartMin: Double = 0.05
+    static let motionBaselineStartMax: Double = 0.30
+    static let motionBaselineStartVelocity: Double = 0.005
+    static let motionBaselineStartFrames: Int = 5
+    static let motionBaselineTopMin: Double = 0.60
+    static let motionBaselineTopVelocityThreshold: Double = 0.01
+    static let motionBaselineTopStableFrames: Int = 3
+
+    static let motionHybridMinDuration: Double = 5.0
+    static let motionHybridMaxDuration: Double = 15.0
+
+    static let motionValleySmoothWindow: Int = 8
+    static let motionValleyPreWindow: Int = 4
+    static let motionValleyStartMax: Double = 0.08
+    static let motionValleyCalmMax: Double = 0.08
+    static let motionValleyRiseMin: Double = 0.16
+    static let motionValleyLookahead: Int = 10
+    static let motionValleyStartGap: Int = 8
+    static let motionValleyTopMin: Double = 0.50
+    static let motionValleyFallMin: Double = 0.08
+    static let motionValleyFallWindow: Int = 6
+    static let motionValleyMinDuration: Double = 6.0
+    static let motionValleyMaxDuration: Double = 11.0
+    static let motionValleyIdealDuration: Double = 9.0
+
     static let laneRegionOfInterest = CGRect(x: 0.24, y: 0.05, width: 0.52, height: 0.90)
 
     static let startZoneMaxY: CGFloat = 0.38
