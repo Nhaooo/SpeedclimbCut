@@ -20,7 +20,7 @@ class PersonTrackingService {
 
         for id in sortedTrackIDs {
             guard let track = tracks[id] else { continue }
-            guard let lastPoint = track.points.last else { continue }
+            guard !track.points.isEmpty else { continue }
 
             if let closestIndex = bestMatchIndex(for: track, in: unassignedBoxes) {
                 let matchedBox = unassignedBoxes.remove(at: closestIndex)
@@ -50,15 +50,16 @@ class PersonTrackingService {
     private func bestMatchIndex(for track: PersonTrack, in boxes: [CGRect]) -> Int? {
         guard let lastPoint = track.points.last else { return nil }
 
-        return boxes.enumerated()
-            .compactMap { index, box in
+        let scoredMatches: [(index: Int, score: CGFloat)] = boxes.enumerated().compactMap { (entry: (offset: Int, element: CGRect)) in
+                let index = entry.offset
+                let box = entry.element
                 guard let score = associationScore(last: lastPoint.bbox, current: box, missedFrames: track.missedFrames) else {
                     return nil
                 }
-                return (index, score)
+                return (index: index, score: score)
             }
-            .max(by: { $0.1 < $1.1 })?
-            .0
+
+        return scoredMatches.max(by: { $0.score < $1.score })?.index
     }
 
     private func associationScore(last: CGRect, current: CGRect, missedFrames: Int) -> CGFloat? {
