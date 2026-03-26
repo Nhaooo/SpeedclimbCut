@@ -7,6 +7,8 @@ final class VideoAnalysisService: ObservableObject {
     @Published var currentStatus = ""
     @Published var lastResult: AnalysisResult?
 
+    private let hybridTrackingService = HybridVisionTrackingService()
+    private let eventDetector = ClimbEventDetector()
     private let motionAnalysisService = MotionHybridAnalysisService()
     private let trimExportService = VideoTrimExportService()
     private let photoLibraryService = PhotoLibraryService()
@@ -49,7 +51,7 @@ final class VideoAnalysisService: ObservableObject {
         DispatchQueue.main.async {
             self.lastResult = nil
             self.isAnalyzing = true
-            self.currentStatus = "Initialisation analyse rapide..."
+            self.currentStatus = "Initialisation analyse hybride..."
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -88,35 +90,105 @@ final class VideoAnalysisService: ObservableObject {
                 logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
             }
 
-            await self.updateStatus("Analyse motion du mur...")
+            var selectedMethod = "none"
+            var finalResult: AnalysisResult?
 
-            let motionAnalysis: MotionHybridAnalysisService.Analysis
+            await self.updateStatus("Suivi du grimpeur...")
+
             do {
-                motionAnalysis = try await self.motionAnalysisService.analyze(
+                if let trackingAnalysis = try await self.hybridTrackingService.analyze(
                     asset: asset,
                     videoTrack: videoTrack,
                     orientation: videoOrientation
-                )
+                ) {
+                    logs += trackingAnalysis.debugLogs
+                    logs += "Hybrid target track: score \(String(format: "%.2f", trackingAnalysis.track.totalScore)), points: \(trackingAnalysis.track.points.count), peakY: \(String(format: "%.2f", trackingAnalysis.track.peakHeight)), lastY: \(String(format: "%.2f", trackingAnalysis.track.lastHeight))\n"
+
+                    let roughResult = self.eventDetector.analyzeTrack(trackingAnalysis.track)
+                    logs += "Hybrid rough events -> start: \(roughResult.startTime?.seconds ?? -1), top: \(roughResult.topTime?.seconds ?? -1)\n"
+
+                    await self.updateStatus("Raffinement haut du corps...")
+
+                    let refinementResult: HybridVisionTrackingService.RefinementResult
+                    do {
+                        refinementResult = try await self.hybridTrackingService.refineEventTimes(
+                            asset: asset,
+                            videoTrack: videoTrack,
+                            orientation: videoOrientation,
+                            baseTrack: trackingAnalysis.track,
+                            roughResult: roughResult
+                        )
+                    } catch {
+                        logs += "WARNING: Body pose refinement failed. \(error.localizedDescription)\n"
+                        refinementResult = HybridVisionTrackingService.RefinementResult(
+                            startTime: roughResult.startTime,
+                            topTime: roughResult.topTime,
+                            debugLogs: ""
+                        )
+                    }
+
+                    logs += refinementResult.debugLogs
+
+                    let hybridResult = self.makeFinalResult(
+                        startTime: refinementResult.startTime ?? roughResult.startTime,
+                        topTime: refinementResult.topTime ?? roughResult.topTime,
+                        confidenceScore: trackingAnalysis.track.totalScore
+                    )
+
+                    if hybridResult.isValid {
+                        finalResult = hybridResult
+                        selectedMethod = "hybrid_vision"
+                    } else {
+                        logs += "Hybrid Vision invalid, fallback vers motion.\n"
+                    }
+                } else {
+                    logs += "Hybrid Vision n'a trouve aucune piste stable, fallback vers motion.\n"
+                }
             } catch {
-                logs += "CRITICAL ERROR: Motion analysis failed. \(error.localizedDescription)\n"
+                logs += "WARNING: Hybrid Vision failed. \(error.localizedDescription)\n"
+            }
+
+            if finalResult == nil {
+                await self.updateStatus("Analyse motion du mur...")
+
+                let motionAnalysis: MotionHybridAnalysisService.Analysis
+                do {
+                    motionAnalysis = try await self.motionAnalysisService.analyze(
+                        asset: asset,
+                        videoTrack: videoTrack,
+                        orientation: videoOrientation
+                    )
+                } catch {
+                    logs += "CRITICAL ERROR: Motion analysis failed. \(error.localizedDescription)\n"
+                    self.finishWithError(logs: logs, cleanupURLs: [url])
+                    return
+                }
+
+                logs += motionAnalysis.debugLogs
+                let motionResult = self.makeFinalResult(
+                    startTime: motionAnalysis.startTime,
+                    topTime: motionAnalysis.topTime,
+                    confidenceScore: motionAnalysis.confidenceScore
+                )
+
+                if motionResult.isValid {
+                    finalResult = motionResult
+                    selectedMethod = "motion_\(motionAnalysis.method)"
+                } else {
+                    logs += "CRITICAL ERROR: Motion analysis could not validate Start or Top.\n"
+                    logs += "Event details - method: \(motionAnalysis.method), start: \(motionAnalysis.startTime?.seconds ?? -1), top: \(motionAnalysis.topTime?.seconds ?? -1)\n"
+                    self.finishWithError(logs: logs, cleanupURLs: [url])
+                    return
+                }
+            }
+
+            guard let finalResult, let start = finalResult.trimStart, let end = finalResult.trimEnd else {
+                logs += "CRITICAL ERROR: No valid analysis strategy produced a trim.\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }
 
-            logs += motionAnalysis.debugLogs
-            let finalResult = self.makeFinalResult(
-                startTime: motionAnalysis.startTime,
-                topTime: motionAnalysis.topTime,
-                confidenceScore: motionAnalysis.confidenceScore
-            )
-
-            guard finalResult.isValid, let start = finalResult.trimStart, let end = finalResult.trimEnd else {
-                logs += "CRITICAL ERROR: Motion analysis could not validate Start or Top.\n"
-                logs += "Event details - method: \(motionAnalysis.method), start: \(motionAnalysis.startTime?.seconds ?? -1), top: \(motionAnalysis.topTime?.seconds ?? -1)\n"
-                self.finishWithError(logs: logs, cleanupURLs: [url])
-                return
-            }
-
+            logs += "Selected analysis method -> \(selectedMethod)\n"
             logs += "SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
             await self.updateStatus("Decoupage (Trim)...")
 

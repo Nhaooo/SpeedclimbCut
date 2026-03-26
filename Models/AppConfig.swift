@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 struct AppConfig {
-    static let analysisFPS: Int = 15
+    static let analysisFPS: Int = 10
     static let maxVideoDimension: CGFloat = 80.0
 
     static let motionAnalysisFPS: Double = 8.0
