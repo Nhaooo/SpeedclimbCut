@@ -143,18 +143,6 @@ def motion_valley_peak(times, values):
     return times[best_pair[0]], times[best_pair[1]]
 
 
-def preferred_start(times, raw_values):
-    start_series = smooth(raw_values, 8)
-    baseline_start, baseline_top = motion_state_machine(times, start_series)
-    valley_start, valley_top = motion_valley_peak(times, start_series)
-
-    if baseline_start is not None and baseline_top is not None and 5.0 <= (baseline_top - baseline_start) <= 15.0:
-        return baseline_start, "baseline"
-    if valley_start is not None:
-        return valley_start, "valley_peak"
-    return baseline_start, "baseline_start_only"
-
-
 def estimate_top_time(times, values, start_time):
     candidate_indices = [
         index for index, time in enumerate(times)
@@ -184,6 +172,16 @@ def estimate_top_time(times, values, start_time):
     return times[plateau_end_index], peak
 
 
+def mean_motion(times, values, start, end):
+    window_values = [
+        value for time, value in zip(times, values)
+        if start <= time < end
+    ]
+    if not window_values:
+        return 0.0
+    return sum(window_values) / len(window_values)
+
+
 def extract_track_candidates(detections):
     tracks = []
     next_id = 1
@@ -192,7 +190,9 @@ def extract_track_candidates(detections):
         current_time = frame["t"]
         boxes = [
             box for box in frame["boxes"]
-            if 0.35 < ((box[0] + box[2]) / 2.0) / 1080.0 < 0.72
+            if 0.40 < ((box[0] + box[2]) / 2.0) / 1080.0 < 0.66
+            and (((box[2] - box[0]) / 1080.0) * ((box[3] - box[1]) / 1920.0)) < 0.08
+            and ((box[3] - box[1]) / 1920.0) < 0.35
         ]
         used = [False] * len(boxes)
 
@@ -214,8 +214,11 @@ def extract_track_candidates(detections):
                 dx = abs(center_x - last_center_x)
                 dy = last_center_y - center_y
 
-                if dx < 0.08 and -0.08 < dy < 0.25:
-                    score = dx + (abs(dy) * 0.4)
+                area = ((box[2] - box[0]) / 1080.0) * ((box[3] - box[1]) / 1920.0)
+                last_area = ((last_box[2] - last_box[0]) / 1080.0) * ((last_box[3] - last_box[1]) / 1920.0)
+
+                if dx < 0.10 and -0.08 < dy < 0.28 and abs(area - last_area) < 0.03:
+                    score = dx + (abs(dy) * 0.5) + (abs(area - last_area) * 0.4)
                     if best_match is None or score < best_match[0]:
                         best_match = (score, index, box)
 
@@ -250,24 +253,9 @@ def run_case(video):
     raw_values = CURVES[label]["raw"]
     top_series = smooth(raw_values, 3)
 
-    pref_start, pref_method = preferred_start(times, raw_values)
-
     with open(video["detections"], "r", encoding="utf-8") as handle:
         detections = json.load(handle)
-
-    if pref_start is None:
-        return {
-            "label": label,
-            "method": pref_method,
-            "error": None,
-            "start": None,
-            "top": None,
-        }
-
-    tracks = extract_track_candidates([
-        frame for frame in detections
-        if pref_start - 2.0 <= frame["t"] <= pref_start + 10.0
-    ])
+    tracks = extract_track_candidates(detections)
 
     best_candidate = None
     best_score = None
@@ -287,7 +275,35 @@ def run_case(video):
             continue
 
         top_time, peak_motion = top_result
-        score = (-abs(start_time - pref_start)) + (gain * 2.0) + min(len(track["points"]) / 20.0, 1.0)
+        start_height = y_values[0]
+        peak_height = max(y_values)
+        end_height = y_values[-1]
+        descent = max(0.0, peak_height - end_height)
+        x_values = [((box[0] + box[2]) / 2.0) / 1080.0 for _, box in track["points"]]
+        x_span = max(x_values) - min(x_values)
+        area_values = [
+            ((box[2] - box[0]) / 1080.0) * ((box[3] - box[1]) / 1920.0)
+            for _, box in track["points"]
+        ]
+        area_average = sum(area_values) / len(area_values)
+        track_duration = track["points"][-1][0] - start_time
+        run_duration = top_time - start_time
+        pre_motion = mean_motion(times, raw_values, start_time - 2.0, start_time)
+        post_motion = mean_motion(times, raw_values, start_time, start_time + 3.0)
+        rise_motion = post_motion - pre_motion
+
+        score = (
+            (gain * 6.0)
+            + (descent * 2.0)
+            + min(len(track["points"]) / 20.0, 1.0)
+            + (1.2 if 6.0 <= run_duration <= 11.0 else 0.0)
+            + (0.8 if start_height <= 0.30 else 0.0)
+            + (rise_motion * 5.0)
+            - (pre_motion * 4.0)
+            - (max(track_duration - 15.0, 0.0) * 0.06)
+            - (x_span * 2.0)
+            - (area_average * 6.0)
+        )
 
         if best_score is None or score > best_score:
             best_score = score
@@ -295,15 +311,20 @@ def run_case(video):
                 "id": track["id"],
                 "start": start_time,
                 "top": top_time,
+                "track_duration": track_duration,
                 "gain": gain,
                 "peak_motion": peak_motion,
                 "points": len(track["points"]),
+                "start_height": start_height,
+                "pre_motion": pre_motion,
+                "post_motion": post_motion,
+                "rise_motion": rise_motion,
             }
 
     if best_candidate is None:
         return {
             "label": label,
-            "method": pref_method,
+            "method": "track_motion_global",
             "error": None,
             "start": None,
             "top": None,
@@ -313,7 +334,7 @@ def run_case(video):
 
     return {
         "label": label,
-        "method": pref_method,
+        "method": "track_motion_global",
         "error": error,
         "start": best_candidate["start"],
         "top": best_candidate["top"],
@@ -321,6 +342,11 @@ def run_case(video):
         "points": best_candidate["points"],
         "gain": best_candidate["gain"],
         "peak_motion": best_candidate["peak_motion"],
+        "track_duration": best_candidate["track_duration"],
+        "start_height": best_candidate["start_height"],
+        "pre_motion": best_candidate["pre_motion"],
+        "post_motion": best_candidate["post_motion"],
+        "rise_motion": best_candidate["rise_motion"],
         "start_error": abs(best_candidate["start"] - video["start_target"]),
         "top_error": abs(best_candidate["top"] - video["top_target"]),
     }

@@ -34,11 +34,6 @@ final class TrackMotionFusionService {
         }
     }
 
-    private struct PreferredStart {
-        let startTime: Double?
-        let method: String
-    }
-
     private struct TrackState {
         let id: Int
         var points: [TrackPoint]
@@ -53,6 +48,11 @@ final class TrackMotionFusionService {
         let gain: Double
         let pointCount: Int
         let peakMotion: Double
+        let startHeight: Double
+        let trackDuration: Double
+        let preMotion: Double
+        let postMotion: Double
+        let motionRise: Double
         let score: Double
     }
 
@@ -78,69 +78,38 @@ final class TrackMotionFusionService {
             )
         }
 
-        let startSeries = smooth(motionCurve.values, window: AppConfig.motionBaselineSmoothWindow)
         let topSeries = smooth(motionCurve.values, window: AppConfig.fusionTopSmoothWindow)
-        let baseline = motionStateMachine(times: motionCurve.times, values: startSeries)
-        let valleyPeak = motionValleyPeak(times: motionCurve.times, values: startSeries)
-        let preferredStart = preferredStart(primary: baseline, fallback: valleyPeak)
 
         var logs = """
         Fusion motion-track: \(motionCurve.values.count) motion samples.
         Fusion motion window -> \(String(format: "%.2f", analysisWindow?.start.seconds ?? 0))s to \(String(format: "%.2f", analysisWindow?.end.seconds ?? assetDuration.seconds))s
-        Fusion baseline -> start: \(baseline.startTime ?? -1), top: \(baseline.topTime ?? -1)
-        Fusion valley_peak -> start: \(valleyPeak.startTime ?? -1), top: \(valleyPeak.topTime ?? -1)
-        Fusion preferred start -> method: \(preferredStart.method), start: \(preferredStart.startTime ?? -1)
+        Fusion mode -> suivi global du grimpeur + validation motion locale.
         """
-
-        guard let preferredStartTime = preferredStart.startTime else {
-            return Analysis(
-                startTime: nil,
-                topTime: nil,
-                confidenceScore: CGFloat(motionCurve.values.max() ?? 0),
-                method: preferredStart.method,
-                debugLogs: logs + "\nFusion motion-track: aucun start motion fiable.\n"
-            )
-        }
-
-        guard let trackingWindow = trackingWindow(
-            around: preferredStartTime,
-            within: analysisWindow,
-            assetDuration: assetDuration
-        ) else {
-            return Analysis(
-                startTime: nil,
-                topTime: nil,
-                confidenceScore: CGFloat(motionCurve.values.max() ?? 0),
-                method: preferredStart.method,
-                debugLogs: logs + "\nFusion motion-track: fenetre de tracking invalide.\n"
-            )
-        }
 
         let candidates = try detectTrackCandidates(
             asset: asset,
             videoTrack: videoTrack,
             orientation: orientation,
-            trackingWindow: trackingWindow,
-            preferredStartTime: preferredStartTime,
+            analysisWindow: analysisWindow,
             motionTimes: motionCurve.times,
+            motionValues: motionCurve.values,
             topSeries: topSeries
         )
-
-        logs += "Fusion tracking window -> \(String(format: "%.2f", trackingWindow.start.seconds))s to \(String(format: "%.2f", trackingWindow.end.seconds))s\n"
+        logs += "Fusion tracking scope -> \(String(format: "%.2f", analysisWindow?.start.seconds ?? 0))s to \(String(format: "%.2f", analysisWindow?.end.seconds ?? assetDuration.seconds))s\n"
 
         guard !candidates.isEmpty else {
             return Analysis(
                 startTime: nil,
                 topTime: nil,
                 confidenceScore: CGFloat(motionCurve.values.max() ?? 0),
-                method: preferredStart.method,
+                method: "track_motion_global",
                 debugLogs: logs + "Fusion motion-track: aucune piste candidate valide.\n"
             )
         }
 
         let sortedCandidates = candidates.sorted { lhs, rhs in lhs.score > rhs.score }
         for candidate in sortedCandidates.prefix(5) {
-            logs += "Fusion candidate #\(candidate.id) -> start \(String(format: "%.2f", candidate.startTime))s, top \(String(format: "%.2f", candidate.topTime))s, gain \(String(format: "%.3f", candidate.gain)), points \(candidate.pointCount), peak \(String(format: "%.3f", candidate.peakMotion)), score \(String(format: "%.3f", candidate.score))\n"
+            logs += "Fusion candidate #\(candidate.id) -> start \(String(format: "%.2f", candidate.startTime))s, top \(String(format: "%.2f", candidate.topTime))s, gain \(String(format: "%.3f", candidate.gain)), startH \(String(format: "%.3f", candidate.startHeight)), rise \(String(format: "%.3f", candidate.motionRise)), pre \(String(format: "%.3f", candidate.preMotion)), post \(String(format: "%.3f", candidate.postMotion)), track \(String(format: "%.2f", candidate.trackDuration))s, points \(candidate.pointCount), peak \(String(format: "%.3f", candidate.peakMotion)), score \(String(format: "%.3f", candidate.score))\n"
         }
 
         guard let selected = sortedCandidates.first else {
@@ -148,7 +117,7 @@ final class TrackMotionFusionService {
                 startTime: nil,
                 topTime: nil,
                 confidenceScore: CGFloat(motionCurve.values.max() ?? 0),
-                method: preferredStart.method,
+                method: "track_motion_global",
                 debugLogs: logs + "Fusion motion-track: impossible de choisir une candidate.\n"
             )
         }
@@ -158,8 +127,8 @@ final class TrackMotionFusionService {
         return Analysis(
             startTime: CMTime(seconds: selected.startTime, preferredTimescale: 600),
             topTime: CMTime(seconds: selected.topTime, preferredTimescale: 600),
-            confidenceScore: CGFloat(min(max(selected.score / 2.0, 0.0), 1.0)),
-            method: "fusion_\(preferredStart.method)",
+            confidenceScore: CGFloat(min(max(selected.score / 5.0, 0.0), 1.0)),
+            method: "track_motion_global",
             debugLogs: logs
         )
     }
@@ -252,13 +221,15 @@ final class TrackMotionFusionService {
         asset: AVAsset,
         videoTrack: AVAssetTrack,
         orientation: CGImagePropertyOrientation,
-        trackingWindow: CMTimeRange,
-        preferredStartTime: Double,
+        analysisWindow: CMTimeRange?,
         motionTimes: [Double],
+        motionValues: [Double],
         topSeries: [Double]
     ) throws -> [CandidateTrack] {
         let reader = try AVAssetReader(asset: asset)
-        reader.timeRange = trackingWindow
+        if let analysisWindow {
+            reader.timeRange = analysisWindow
+        }
 
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -289,7 +260,7 @@ final class TrackMotionFusionService {
         detectRequest.regionOfInterest = AppConfig.laneRegionOfInterest
 
         let frameInterval = CMTime(seconds: 1.0 / Double(AppConfig.fusionVisionFPS), preferredTimescale: 600)
-        var nextTargetTime = trackingWindow.start
+        var nextTargetTime = analysisWindow?.start ?? .zero
         var tracks: [Int: TrackState] = [:]
         var nextID = 1
         var completedTracks: [TrackState] = []
@@ -348,11 +319,41 @@ final class TrackMotionFusionService {
             guard let topEstimate = estimateTopTime(times: motionTimes, values: topSeries, startTime: startTime) else {
                 return nil
             }
+            let startHeight = yValues[0]
+            let peakHeight = maxY
+            let endHeight = yValues[yValues.count - 1]
+            let descent = max(0.0, peakHeight - endHeight)
+            let trackDuration = (track.points[track.points.count - 1].time.seconds - startTime)
+            let runDuration = topEstimate.time - startTime
+            let horizontalCenters = track.points.map { Double($0.bbox.midX) }
+            let xSpan = (horizontalCenters.max() ?? 0) - (horizontalCenters.min() ?? 0)
+            let areas = track.points.map { Double($0.bbox.width * $0.bbox.height) }
+            let areaAverage = areas.reduce(0, +) / Double(max(areas.count, 1))
+            let preMotion = meanMotion(
+                times: motionTimes,
+                values: motionValues,
+                from: startTime - AppConfig.fusionTrackMotionLookbackSeconds,
+                to: startTime
+            )
+            let postMotion = meanMotion(
+                times: motionTimes,
+                values: motionValues,
+                from: startTime,
+                to: startTime + AppConfig.fusionTrackMotionLookaheadSeconds
+            )
+            let motionRise = postMotion - preMotion
 
             let score =
-                (-abs(startTime - preferredStartTime)) +
-                (gain * 2.0) +
-                min(Double(track.points.count) / 20.0, 1.0)
+                (gain * 6.0) +
+                (descent * 2.0) +
+                min(Double(track.points.count) / 20.0, 1.0) +
+                ((runDuration >= AppConfig.fusionTopMinDuration && runDuration <= AppConfig.fusionTopMaxDuration) ? 1.2 : 0.0) +
+                ((startHeight <= AppConfig.fusionTrackStartHeightMax) ? 0.8 : 0.0) +
+                (motionRise * 5.0) -
+                (preMotion * 4.0) -
+                (max(trackDuration - AppConfig.fusionTrackLongDurationPenaltyAfterSeconds, 0.0) * 0.06) -
+                (xSpan * 2.0) -
+                (areaAverage * 6.0)
 
             return CandidateTrack(
                 id: track.id,
@@ -361,6 +362,11 @@ final class TrackMotionFusionService {
                 gain: gain,
                 pointCount: track.points.count,
                 peakMotion: topEstimate.peak,
+                startHeight: startHeight,
+                trackDuration: trackDuration,
+                preMotion: preMotion,
+                postMotion: postMotion,
+                motionRise: motionRise,
                 score: score
             )
         }
@@ -706,21 +712,6 @@ final class TrackMotionFusionService {
         return MotionTiming(startTime: times[bestPair.0], topTime: times[bestPair.1])
     }
 
-    private func preferredStart(primary: MotionTiming, fallback: MotionTiming) -> PreferredStart {
-        if primary.isValid,
-           let duration = primary.duration,
-           duration >= AppConfig.motionHybridMinDuration,
-           duration <= AppConfig.motionHybridMaxDuration {
-            return PreferredStart(startTime: primary.startTime, method: "baseline")
-        }
-
-        if let fallbackStart = fallback.startTime {
-            return PreferredStart(startTime: fallbackStart, method: "valley_peak")
-        }
-
-        return PreferredStart(startTime: primary.startTime, method: "baseline_start_only")
-    }
-
     private func dedupe(indices: [Int], minimumGap: Int) -> [Int] {
         var deduped: [Int] = []
         for index in indices {
@@ -747,26 +738,13 @@ final class TrackMotionFusionService {
         return CMTimeRange(start: start, end: end)
     }
 
-    private func trackingWindow(around preferredStartTime: Double, within analysisWindow: CMTimeRange?, assetDuration: CMTime) -> CMTimeRange? {
-        let lowerBound = analysisWindow?.start.seconds ?? 0
-        let upperBound = analysisWindow?.end.seconds ?? assetDuration.seconds
-
-        let startSeconds = max(lowerBound, preferredStartTime - AppConfig.fusionTrackWindowBeforeSeconds)
-        let endSeconds = min(upperBound, preferredStartTime + AppConfig.fusionTrackWindowAfterSeconds)
-
-        guard endSeconds - startSeconds >= 4.0 else {
-            return nil
-        }
-
-        return CMTimeRange(
-            start: CMTime(seconds: startSeconds, preferredTimescale: 600),
-            end: CMTime(seconds: endSeconds, preferredTimescale: 600)
-        )
-    }
-
     private func isTrackLaneCandidate(_ box: CGRect) -> Bool {
         let centerX = box.midX
-        return centerX > AppConfig.fusionTrackMinCenterX && centerX < AppConfig.fusionTrackMaxCenterX
+        let area = box.width * box.height
+        return centerX > AppConfig.fusionTrackMinCenterX &&
+            centerX < AppConfig.fusionTrackMaxCenterX &&
+            area < AppConfig.fusionTrackMaxArea &&
+            box.height < AppConfig.fusionTrackMaxHeightRatio
     }
 
     private func topOfBoxValue(for box: CGRect) -> CGFloat {
@@ -800,5 +778,20 @@ final class TrackMotionFusionService {
         default:
             return rect
         }
+    }
+
+    private func meanMotion(times: [Double], values: [Double], from lowerBound: Double, to upperBound: Double) -> Double {
+        guard upperBound > lowerBound else { return 0 }
+
+        var total = 0.0
+        var count = 0
+
+        for (time, value) in zip(times, values) where time >= lowerBound && time < upperBound {
+            total += value
+            count += 1
+        }
+
+        guard count > 0 else { return 0 }
+        return total / Double(count)
     }
 }

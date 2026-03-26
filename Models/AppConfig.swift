@@ -18,6 +18,12 @@ struct AppConfig {
     static let fusionTrackMaxDX: CGFloat = 0.08
     static let fusionTrackMinDY: CGFloat = -0.08
     static let fusionTrackMaxDY: CGFloat = 0.25
+    static let fusionTrackMaxArea: CGFloat = 0.08
+    static let fusionTrackMaxHeightRatio: CGFloat = 0.35
+    static let fusionTrackStartHeightMax: Double = 0.30
+    static let fusionTrackMotionLookbackSeconds: Double = 2.0
+    static let fusionTrackMotionLookaheadSeconds: Double = 3.0
+    static let fusionTrackLongDurationPenaltyAfterSeconds: Double = 15.0
 
     static let fusionMotionGridWidth: Int = 20
     static let fusionMotionGridHeight: Int = 40

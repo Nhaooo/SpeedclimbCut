@@ -262,7 +262,12 @@ final class VideoAnalysisService: ObservableObject {
                 !motionDurationLooksGood
 
             if largeDisagreement,
-                motionLooksSuspicious,
+                fusion.confidence >= AppConfig.fusionOverrideConfidenceThreshold {
+                logs += "Selection strategies -> grand desaccord, la strategie grimpeur prend la main.\n"
+                return fusion
+            }
+
+            if motionLooksSuspicious,
                 fusion.confidence >= AppConfig.fusionOverrideConfidenceThreshold {
                 logs += "Selection strategies -> motion suspect et fusion plausible, on bascule vers fusion.\n"
                 return fusion
