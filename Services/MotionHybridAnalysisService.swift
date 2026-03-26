@@ -55,9 +55,19 @@ final class MotionHybridAnalysisService {
 
         let selected = chooseHybridResult(primary: baseline, fallback: valleyPeak)
         let peakMotion = CGFloat(curve.values.max() ?? 0)
+        let peakIndex = curve.values.enumerated().max(by: { $0.element < $1.element })?.offset
+        let peakTime = peakIndex.flatMap { index in
+            guard curve.times.indices.contains(index) else { return nil }
+            return curve.times[index]
+        } ?? -1
+        let effectiveFPS = estimatedFPS(from: curve.times)
+        let analyzedSpan = max((curve.times.last ?? 0) - (curve.times.first ?? 0), 0)
+        let nonZeroSamples = curve.values.filter { $0 > 0.0 }.count
+        let minMotion = curve.values.min() ?? 0
 
         let logs = """
-        Motion analysis: \(curve.values.count) samples @ \(Int(AppConfig.motionAnalysisFPS)) FPS.
+        Motion analysis: \(curve.values.count) samples, target \(Int(AppConfig.motionAnalysisFPS)) FPS, effective \(String(format: "%.2f", effectiveFPS)) FPS over \(String(format: "%.2f", analyzedSpan))s.
+        Motion curve -> min: \(String(format: "%.3f", minMotion)), max: \(String(format: "%.3f", Double(peakMotion))), non-zero: \(nonZeroSamples), peak time: \(String(format: "%.2f", peakTime))
         Motion baseline -> start: \(baseline.startTime ?? -1), top: \(baseline.topTime ?? -1)
         Motion valley_peak -> start: \(valleyPeak.startTime ?? -1), top: \(valleyPeak.topTime ?? -1)
         Motion selected -> method: \(selected.method), start: \(selected.timing.startTime ?? -1), top: \(selected.timing.topTime ?? -1), peak: \(String(format: "%.3f", peakMotion))
@@ -175,7 +185,10 @@ final class MotionHybridAnalysisService {
         var grayscale = [UInt8](repeating: 0, count: width * height)
 
         for row in 0..<height {
-            let rowPointer = bytes + (row * bytesPerRow)
+            // CI/CG image buffers can come back vertically flipped relative to the
+            // motion benchmark. Normalize here so row 0 is always the visual top.
+            let sourceRow = (height - 1) - row
+            let rowPointer = bytes + (sourceRow * bytesPerRow)
             for column in 0..<width {
                 let pixelOffset = column * 4
                 let red = Int(rowPointer[pixelOffset])
@@ -379,5 +392,14 @@ final class MotionHybridAnalysisService {
         }
 
         return deduped
+    }
+
+    private func estimatedFPS(from times: [Double]) -> Double {
+        guard times.count > 1 else { return 0 }
+
+        let span = times[times.count - 1] - times[0]
+        guard span > 0 else { return 0 }
+
+        return Double(times.count - 1) / span
     }
 }
