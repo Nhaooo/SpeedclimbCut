@@ -266,14 +266,14 @@ def run_case(video):
 
     tracks = extract_track_candidates([
         frame for frame in detections
-        if pref_start - 1.0 <= frame["t"] <= pref_start + 8.0
+        if pref_start - 2.0 <= frame["t"] <= pref_start + 10.0
     ])
 
     best_candidate = None
     best_score = None
 
     for track in tracks:
-        if len(track["points"]) < 4:
+        if len(track["points"]) < 3:
             continue
 
         y_values = [1.0 - (box[1] / 1920.0) for _, box in track["points"]]

@@ -8,9 +8,9 @@ struct AppConfig {
     static let analysisSkipTrailingSeconds: Double = 5.0
 
     static let fusionVisionFPS: Int = 5
-    static let fusionTrackWindowBeforeSeconds: Double = 1.0
-    static let fusionTrackWindowAfterSeconds: Double = 8.0
-    static let fusionTrackMinPoints: Int = 4
+    static let fusionTrackWindowBeforeSeconds: Double = 2.0
+    static let fusionTrackWindowAfterSeconds: Double = 10.0
+    static let fusionTrackMinPoints: Int = 3
     static let fusionTrackMinGain: Double = 0.05
     static let fusionTrackMaxMissedFrames: Int = 6
     static let fusionTrackMinCenterX: CGFloat = 0.40
@@ -23,7 +23,7 @@ struct AppConfig {
     static let fusionMotionGridHeight: Int = 40
     static let fusionMotionLaneStartColumn: Int = 7
     static let fusionMotionLaneEndColumn: Int = 12
-    static let fusionMotionMinActiveCellsPerRow: Int = 2
+    static let fusionMotionMinActiveCellsPerRow: Int = 1
     static let fusionTopSmoothWindow: Int = 3
     static let fusionTopPeakMin: Double = 0.45
     static let fusionTopPeakHighRatio: Double = 0.96
@@ -45,7 +45,7 @@ struct AppConfig {
     static let motionThreshold: Int = 20
     static let motionLaneStartColumn: Int = 3
     static let motionLaneEndColumn: Int = 7
-    static let motionMinActiveCellsPerRow: Int = 2
+    static let motionMinActiveCellsPerRow: Int = 1
 
     static let motionBaselineSmoothWindow: Int = 8
     static let motionBaselineStartMin: Double = 0.05
