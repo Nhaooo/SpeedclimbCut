@@ -7,14 +7,19 @@ final class VideoAnalysisService: ObservableObject {
     @Published var currentStatus = ""
     @Published var lastResult: AnalysisResult?
 
-    private let hybridTrackingService = HybridVisionTrackingService()
-    private let eventDetector = ClimbEventDetector()
+    private let fusionAnalysisService = TrackMotionFusionService()
     private let motionAnalysisService = MotionHybridAnalysisService()
     private let trimExportService = VideoTrimExportService()
     private let photoLibraryService = PhotoLibraryService()
     private let recordingManager = RecordingManager.shared
 
     private var pendingCleanupURLs: [URL] = []
+
+    private struct StrategyCandidate {
+        let method: String
+        let result: AnalysisResult
+        let confidence: CGFloat
+    }
 
     func prepareImportedVideoLoad() {
         cleanupPendingFiles()
@@ -51,7 +56,7 @@ final class VideoAnalysisService: ObservableObject {
         DispatchQueue.main.async {
             self.lastResult = nil
             self.isAnalyzing = true
-            self.currentStatus = "Initialisation analyse hybride..."
+            self.currentStatus = "Initialisation analyse finale..."
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -90,81 +95,20 @@ final class VideoAnalysisService: ObservableObject {
                 logs += "Video orientation detected: \(videoOrientation.rawValue)\n"
             }
 
-            var selectedMethod = "none"
-            var finalResult: AnalysisResult?
+            var motionCandidate: StrategyCandidate?
+            var fusionCandidate: StrategyCandidate?
 
-            await self.updateStatus("Suivi du grimpeur...")
+            await self.updateStatus("Analyse motion du mur...")
 
             do {
-                if let trackingAnalysis = try await self.hybridTrackingService.analyze(
+                let motionAnalysis = try await self.motionAnalysisService.analyze(
                     asset: asset,
                     videoTrack: videoTrack,
                     orientation: videoOrientation
-                ) {
-                    logs += trackingAnalysis.debugLogs
-                    logs += "Hybrid target track: score \(String(format: "%.2f", trackingAnalysis.track.totalScore)), points: \(trackingAnalysis.track.points.count), peakY: \(String(format: "%.2f", trackingAnalysis.track.peakHeight)), lastY: \(String(format: "%.2f", trackingAnalysis.track.lastHeight))\n"
-
-                    let roughResult = self.eventDetector.analyzeTrack(trackingAnalysis.track)
-                    logs += "Hybrid rough events -> start: \(roughResult.startTime?.seconds ?? -1), top: \(roughResult.topTime?.seconds ?? -1)\n"
-
-                    await self.updateStatus("Raffinement haut du corps...")
-
-                    let refinementResult: HybridVisionTrackingService.RefinementResult
-                    do {
-                        refinementResult = try await self.hybridTrackingService.refineEventTimes(
-                            asset: asset,
-                            videoTrack: videoTrack,
-                            orientation: videoOrientation,
-                            baseTrack: trackingAnalysis.track,
-                            roughResult: roughResult
-                        )
-                    } catch {
-                        logs += "WARNING: Body pose refinement failed. \(error.localizedDescription)\n"
-                        refinementResult = HybridVisionTrackingService.RefinementResult(
-                            startTime: roughResult.startTime,
-                            topTime: roughResult.topTime,
-                            debugLogs: ""
-                        )
-                    }
-
-                    logs += refinementResult.debugLogs
-
-                    let hybridResult = self.makeFinalResult(
-                        startTime: refinementResult.startTime ?? roughResult.startTime,
-                        topTime: refinementResult.topTime ?? roughResult.topTime,
-                        confidenceScore: trackingAnalysis.track.totalScore
-                    )
-
-                    if hybridResult.isValid {
-                        finalResult = hybridResult
-                        selectedMethod = "hybrid_vision"
-                    } else {
-                        logs += "Hybrid Vision invalid, fallback vers motion.\n"
-                    }
-                } else {
-                    logs += "Hybrid Vision n'a trouve aucune piste stable, fallback vers motion.\n"
-                }
-            } catch {
-                logs += "WARNING: Hybrid Vision failed. \(error.localizedDescription)\n"
-            }
-
-            if finalResult == nil {
-                await self.updateStatus("Analyse motion du mur...")
-
-                let motionAnalysis: MotionHybridAnalysisService.Analysis
-                do {
-                    motionAnalysis = try await self.motionAnalysisService.analyze(
-                        asset: asset,
-                        videoTrack: videoTrack,
-                        orientation: videoOrientation
-                    )
-                } catch {
-                    logs += "CRITICAL ERROR: Motion analysis failed. \(error.localizedDescription)\n"
-                    self.finishWithError(logs: logs, cleanupURLs: [url])
-                    return
-                }
+                )
 
                 logs += motionAnalysis.debugLogs
+
                 let motionResult = self.makeFinalResult(
                     startTime: motionAnalysis.startTime,
                     topTime: motionAnalysis.topTime,
@@ -172,23 +116,66 @@ final class VideoAnalysisService: ObservableObject {
                 )
 
                 if motionResult.isValid {
-                    finalResult = motionResult
-                    selectedMethod = "motion_\(motionAnalysis.method)"
+                    motionCandidate = StrategyCandidate(
+                        method: "motion_\(motionAnalysis.method)",
+                        result: motionResult,
+                        confidence: motionAnalysis.confidenceScore
+                    )
                 } else {
-                    logs += "CRITICAL ERROR: Motion analysis could not validate Start or Top.\n"
-                    logs += "Event details - method: \(motionAnalysis.method), start: \(motionAnalysis.startTime?.seconds ?? -1), top: \(motionAnalysis.topTime?.seconds ?? -1)\n"
-                    self.finishWithError(logs: logs, cleanupURLs: [url])
-                    return
+                    logs += "Motion invalide, tentative fusion motion-track locale.\n"
                 }
+            } catch {
+                logs += "WARNING: Motion analysis failed. \(error.localizedDescription)\n"
             }
 
-            guard let finalResult, let start = finalResult.trimStart, let end = finalResult.trimEnd else {
+            await self.updateStatus("Analyse fusion motion + grimpeur...")
+
+            do {
+                let fusionAnalysis = try await self.fusionAnalysisService.analyze(
+                    asset: asset,
+                    videoTrack: videoTrack,
+                    orientation: videoOrientation
+                )
+
+                logs += fusionAnalysis.debugLogs
+
+                let fusionResult = self.makeFinalResult(
+                    startTime: fusionAnalysis.startTime,
+                    topTime: fusionAnalysis.topTime,
+                    confidenceScore: fusionAnalysis.confidenceScore
+                )
+
+                if fusionResult.isValid {
+                    fusionCandidate = StrategyCandidate(
+                        method: fusionAnalysis.method,
+                        result: fusionResult,
+                        confidence: fusionAnalysis.confidenceScore
+                    )
+                } else {
+                    logs += "Fusion motion-track invalide sur cette video.\n"
+                }
+            } catch {
+                logs += "WARNING: Fusion motion-track failed. \(error.localizedDescription)\n"
+            }
+
+            guard let selectedCandidate = self.selectBestCandidate(
+                motionCandidate: motionCandidate,
+                fusionCandidate: fusionCandidate,
+                logs: &logs
+            ) else {
                 logs += "CRITICAL ERROR: No valid analysis strategy produced a trim.\n"
                 self.finishWithError(logs: logs, cleanupURLs: [url])
                 return
             }
 
-            logs += "Selected analysis method -> \(selectedMethod)\n"
+            let finalResult = selectedCandidate.result
+            guard let start = finalResult.trimStart, let end = finalResult.trimEnd else {
+                logs += "CRITICAL ERROR: No valid analysis strategy produced a trim.\n"
+                self.finishWithError(logs: logs, cleanupURLs: [url])
+                return
+            }
+
+            logs += "Selected analysis method -> \(selectedCandidate.method)\n"
             logs += "SUCCESS! Trim constraints -> Start: \(String(format: "%.2f", start.seconds))s, End: \(String(format: "%.2f", end.seconds))s\n"
             await self.updateStatus("Decoupage (Trim)...")
 
@@ -232,6 +219,70 @@ final class VideoAnalysisService: ObservableObject {
             exportedURL: nil,
             savedToLibrary: false
         )
+    }
+
+    private func selectBestCandidate(
+        motionCandidate: StrategyCandidate?,
+        fusionCandidate: StrategyCandidate?,
+        logs: inout String
+    ) -> StrategyCandidate? {
+        switch (motionCandidate, fusionCandidate) {
+        case let (motion?, fusion?):
+            guard
+                let motionStart = motion.result.startTime?.seconds,
+                let motionTop = motion.result.topTime?.seconds,
+                let fusionStart = fusion.result.startTime?.seconds,
+                let fusionTop = fusion.result.topTime?.seconds
+            else {
+                logs += "Selection strategies -> donnees incompletes, fallback simple.\n"
+                return motion.result.isValid ? motion : (fusion.result.isValid ? fusion : nil)
+            }
+
+            let startGap = abs(motionStart - fusionStart)
+            let topGap = abs(motionTop - fusionTop)
+            let motionDuration = motionTop - motionStart
+            let motionDurationLooksGood =
+                motionDuration >= AppConfig.motionPreferredDurationMinSeconds &&
+                motionDuration <= AppConfig.motionPreferredDurationMaxSeconds
+
+            logs += "Selection strategies -> motion \(motion.method) vs fusion \(fusion.method)\n"
+            logs += "Selection strategies -> start gap: \(String(format: "%.2f", startGap))s, top gap: \(String(format: "%.2f", topGap))s, motion peak: \(String(format: "%.3f", motion.confidence)), fusion confidence: \(String(format: "%.3f", fusion.confidence))\n"
+
+            if startGap <= AppConfig.fusionAgreementStartToleranceSeconds &&
+                topGap <= AppConfig.fusionAgreementTopToleranceSeconds {
+                logs += "Selection strategies -> bon accord motion/fusion, on garde motion.\n"
+                return motion
+            }
+
+            let largeDisagreement =
+                startGap >= AppConfig.fusionOverrideDisagreementSeconds ||
+                topGap >= AppConfig.fusionOverrideDisagreementSeconds
+            let motionLooksSuspicious =
+                motion.confidence >= AppConfig.motionSuspiciousPeakThreshold ||
+                !motionDurationLooksGood
+
+            if largeDisagreement,
+                motionLooksSuspicious,
+                fusion.confidence >= AppConfig.fusionOverrideConfidenceThreshold {
+                logs += "Selection strategies -> motion suspect et fusion plausible, on bascule vers fusion.\n"
+                return fusion
+            }
+
+            logs += "Selection strategies -> desaccord non bloquant, motion reste la reference.\n"
+            return motion
+
+        case let (motion?, nil):
+            logs += "Selection strategies -> fusion indisponible, on garde motion.\n"
+            return motion
+
+        case let (nil, fusion?):
+            logs += "Selection strategies -> motion indisponible, on garde fusion.\n"
+            return fusion
+
+        case (nil, nil):
+            logs += "Selection strategies -> aucune strategie valide.\n"
+            return nil
+        }
     }
 
     private func handleTrimCompletion(

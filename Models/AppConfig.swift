@@ -7,6 +7,36 @@ struct AppConfig {
     static let analysisSkipLeadingSeconds: Double = 5.0
     static let analysisSkipTrailingSeconds: Double = 5.0
 
+    static let fusionVisionFPS: Int = 5
+    static let fusionTrackWindowBeforeSeconds: Double = 1.0
+    static let fusionTrackWindowAfterSeconds: Double = 8.0
+    static let fusionTrackMinPoints: Int = 4
+    static let fusionTrackMinGain: Double = 0.05
+    static let fusionTrackMaxMissedFrames: Int = 6
+    static let fusionTrackMinCenterX: CGFloat = 0.40
+    static let fusionTrackMaxCenterX: CGFloat = 0.66
+    static let fusionTrackMaxDX: CGFloat = 0.08
+    static let fusionTrackMinDY: CGFloat = -0.08
+    static let fusionTrackMaxDY: CGFloat = 0.25
+
+    static let fusionMotionGridWidth: Int = 20
+    static let fusionMotionGridHeight: Int = 40
+    static let fusionMotionLaneStartColumn: Int = 7
+    static let fusionMotionLaneEndColumn: Int = 12
+    static let fusionMotionMinActiveCellsPerRow: Int = 2
+    static let fusionTopSmoothWindow: Int = 3
+    static let fusionTopPeakMin: Double = 0.45
+    static let fusionTopPeakHighRatio: Double = 0.96
+    static let fusionTopMinDuration: Double = 6.0
+    static let fusionTopMaxDuration: Double = 11.0
+    static let fusionAgreementStartToleranceSeconds: Double = 1.25
+    static let fusionAgreementTopToleranceSeconds: Double = 1.25
+    static let motionSuspiciousPeakThreshold: CGFloat = 0.95
+    static let motionPreferredDurationMinSeconds: Double = 5.5
+    static let motionPreferredDurationMaxSeconds: Double = 12.0
+    static let fusionOverrideDisagreementSeconds: Double = 2.0
+    static let fusionOverrideConfidenceThreshold: CGFloat = 0.45
+
     static let motionAnalysisFPS: Double = 8.0
     static let motionMinAnalysisFPS: Double = 5.0
     static let motionTargetMaxSamples: Double = 1200.0
@@ -15,6 +45,7 @@ struct AppConfig {
     static let motionThreshold: Int = 20
     static let motionLaneStartColumn: Int = 3
     static let motionLaneEndColumn: Int = 7
+    static let motionMinActiveCellsPerRow: Int = 2
 
     static let motionBaselineSmoothWindow: Int = 8
     static let motionBaselineStartMin: Double = 0.05

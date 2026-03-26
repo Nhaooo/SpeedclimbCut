@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreGraphics
 import Foundation
 import ImageIO
 
@@ -235,12 +236,17 @@ final class MotionHybridAnalysisService {
         let endColumn = min(AppConfig.motionLaneEndColumn, width)
 
         for row in 0..<height {
+            var activeCells = 0
             for column in startColumn..<endColumn {
                 let index = (row * width) + column
                 let delta = abs(Int(current[index]) - Int(previous[index]))
                 if delta >= AppConfig.motionThreshold {
-                    return 1.0 - (Double(row) / Double(height))
+                    activeCells += 1
                 }
+            }
+
+            if activeCells >= AppConfig.motionMinActiveCellsPerRow {
+                return 1.0 - (Double(row) / Double(height))
             }
         }
 
