@@ -24,7 +24,7 @@ class PersonTrackingService {
 
             if let closestIndex = bestMatchIndex(for: track, in: unassignedBoxes) {
                 let matchedBox = unassignedBoxes.remove(at: closestIndex)
-                let newPoint = TrackPoint(time: cmTime, y: matchedBox.midY, bbox: matchedBox)
+                let newPoint = TrackPoint(time: cmTime, y: anchorY(for: matchedBox), bbox: matchedBox)
                 tracks[id]?.points.append(newPoint)
                 tracks[id]?.missedFrames = 0
             } else {
@@ -42,7 +42,7 @@ class PersonTrackingService {
 
         for box in unassignedBoxes {
             let id = UUID()
-            let newPoint = TrackPoint(time: cmTime, y: box.midY, bbox: box)
+            let newPoint = TrackPoint(time: cmTime, y: anchorY(for: box), bbox: box)
             tracks[id] = PersonTrack(id: id, points: [newPoint])
         }
     }
@@ -89,5 +89,10 @@ class PersonTrackingService {
     func reset() {
         tracks.removeAll()
         completedTracks.removeAll()
+    }
+
+    private func anchorY(for box: CGRect) -> CGFloat {
+        let rawAnchor = box.minY + (box.height * AppConfig.upperBodyAnchorRatio)
+        return min(max(rawAnchor, 0), 1)
     }
 }

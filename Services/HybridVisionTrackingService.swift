@@ -17,6 +17,12 @@ final class HybridVisionTrackingService {
 
     func analyze(asset: AVAsset, videoTrack: AVAssetTrack, orientation: CGImagePropertyOrientation) async throws -> TrackingAnalysis? {
         let reader = try AVAssetReader(asset: asset)
+        let assetDuration = (try? await asset.load(.duration)) ?? videoTrack.timeRange.duration
+        let analysisWindow = analysisTimeRange(for: assetDuration)
+        if let analysisWindow {
+            reader.timeRange = analysisWindow
+        }
+
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         ]
@@ -43,12 +49,10 @@ final class HybridVisionTrackingService {
         }
 
         let frameInterval = CMTime(seconds: 1.0 / Double(AppConfig.analysisFPS), preferredTimescale: 600)
-        var nextTargetTime = CMTime.zero
+        var nextTargetTime = analysisWindow?.start ?? .zero
         var sampledFrames = 0
-        var lastResolvedBox: CGRect?
-        var trackRequest: VNTrackObjectRequest?
-        var points: [TrackPoint] = []
-        var logs = "Hybrid pass 1: ROI voie + VNTrackObjectRequest.\n"
+        var logs = "Hybrid pass 1: multi-detection Vision dans la voie.\n"
+        let trackingService = PersonTrackingService()
 
         let detectRequest = VNDetectHumanRectanglesRequest()
         detectRequest.regionOfInterest = AppConfig.laneRegionOfInterest
@@ -60,61 +64,30 @@ final class HybridVisionTrackingService {
                 continue
             }
 
-            let currentBox: CGRect? = autoreleasepool {
+            let currentBoxes: [CGRect] = autoreleasepool {
                 guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    return nil
+                    return []
                 }
 
                 let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
-                var resolvedBox: CGRect?
-
-                if let activeTrackRequest = trackRequest {
-                    do {
-                        try handler.perform([activeTrackRequest])
-                        if let trackedObservation = activeTrackRequest.results?.first as? VNDetectedObjectObservation,
-                           trackedObservation.confidence >= AppConfig.trackingConfidenceThreshold {
-                            let transformed = clampToUnitRect(transformRect(trackedObservation.boundingBox, orientation: orientation))
-                            if transformed.intersects(AppConfig.laneRegionOfInterest) {
-                                resolvedBox = transformed
-                                activeTrackRequest.inputObservation = trackedObservation
-                            } else {
-                                trackRequest = nil
-                            }
-                        } else {
-                            trackRequest = nil
-                        }
-                    } catch {
-                        logs += "Track Vision error @ \(String(format: "%.2f", presentationTime.seconds))s: \(error.localizedDescription)\n"
-                        trackRequest = nil
-                    }
+                do {
+                    try handler.perform([detectRequest])
+                    let observations = (detectRequest.results as? [VNHumanObservation]) ?? []
+                    return observations
+                        .filter { $0.confidence >= AppConfig.trackingConfidenceThreshold }
+                        .map(\.boundingBox)
+                        .map { clampToUnitRect(transformRect($0, orientation: orientation)) }
+                        .filter { $0.intersects(AppConfig.laneRegionOfInterest) }
+                } catch {
+                    logs += "Detect Vision error @ \(String(format: "%.2f", presentationTime.seconds))s: \(error.localizedDescription)\n"
+                    return []
                 }
-
-                let shouldRedetect = resolvedBox == nil || sampledFrames % AppConfig.trackerRedetectionInterval == 0
-                if shouldRedetect {
-                    do {
-                        try handler.perform([detectRequest])
-                        let observations = (detectRequest.results as? [VNHumanObservation]) ?? []
-                        if let selectedRawBox = selectBestHumanBox(from: observations, previousBox: lastResolvedBox, orientation: orientation) {
-                            let selectedBox = clampToUnitRect(transformRect(selectedRawBox, orientation: orientation))
-                            resolvedBox = selectedBox
-
-                            let seedObservation = VNDetectedObjectObservation(boundingBox: selectedRawBox)
-                            let newTrackRequest = VNTrackObjectRequest(detectedObjectObservation: seedObservation)
-                            newTrackRequest.trackingLevel = .accurate
-                            trackRequest = newTrackRequest
-                        }
-                    } catch {
-                        logs += "Detect Vision error @ \(String(format: "%.2f", presentationTime.seconds))s: \(error.localizedDescription)\n"
-                    }
-                }
-
-                return resolvedBox
             }
 
-            if let currentBox {
-                lastResolvedBox = currentBox
-                let anchorY = upperBodyAnchor(for: currentBox)
-                points.append(TrackPoint(time: presentationTime, y: anchorY, bbox: currentBox))
+            trackingService.processFrame(cmTime: presentationTime, boundingBoxes: currentBoxes)
+
+            if sampledFrames % 20 == 0 {
+                logs += "Hybrid detect frame \(sampledFrames) @ \(String(format: "%.2f", presentationTime.seconds))s: \(currentBoxes.count) humain(s).\n"
             }
 
             sampledFrames += 1
@@ -122,13 +95,13 @@ final class HybridVisionTrackingService {
             CMSampleBufferInvalidate(sampleBuffer)
         }
 
-        guard !points.isEmpty else {
+        guard let track = trackingService.getTargetTrack() else {
             logs += "Aucune piste athlete stable detectee dans la ROI.\n"
             return nil
         }
 
-        let track = PersonTrack(id: UUID(), points: points)
-        logs += "Hybrid pass 1 OK: \(points.count) points, peakY \(String(format: "%.2f", track.peakHeight)), lastY \(String(format: "%.2f", track.lastHeight)).\n"
+        logs += "Hybrid pass 1 window: \(String(format: "%.2f", analysisWindow?.start.seconds ?? 0))s -> \(String(format: "%.2f", analysisWindow?.end.seconds ?? assetDuration.seconds))s.\n"
+        logs += "Hybrid pass 1 OK: \(track.points.count) points, peakY \(String(format: "%.2f", track.peakHeight)), lastY \(String(format: "%.2f", track.lastHeight)).\n"
         return TrackingAnalysis(track: track, debugLogs: logs)
     }
 
@@ -323,34 +296,6 @@ final class HybridVisionTrackingService {
         return points.max(by: { $0.y < $1.y })?.time
     }
 
-    private func selectBestHumanBox(
-        from observations: [VNHumanObservation],
-        previousBox: CGRect?,
-        orientation: CGImagePropertyOrientation
-    ) -> CGRect? {
-        observations
-            .filter { $0.confidence >= AppConfig.trackingConfidenceThreshold }
-            .map(\.boundingBox)
-            .filter { transformRect($0, orientation: orientation).intersects(AppConfig.laneRegionOfInterest) }
-            .max { lhs, rhs in
-                score(for: lhs, previousBox: previousBox, orientation: orientation)
-                    < score(for: rhs, previousBox: previousBox, orientation: orientation)
-            }
-    }
-
-    private func score(for rawBox: CGRect, previousBox: CGRect?, orientation: CGImagePropertyOrientation) -> CGFloat {
-        let box = clampToUnitRect(transformRect(rawBox, orientation: orientation))
-        let areaScore = box.width * box.height * 2.0
-        let lanePenalty = abs(box.midX - AppConfig.laneRegionOfInterest.midX)
-
-        guard let previousBox else {
-            return areaScore - lanePenalty
-        }
-
-        let continuityPenalty = abs(box.midX - previousBox.midX) + abs(box.maxY - previousBox.maxY)
-        return areaScore - lanePenalty - (continuityPenalty * 1.5)
-    }
-
     private func upperBodyAnchor(for box: CGRect) -> CGFloat {
         clamp(box.minY + (box.height * AppConfig.upperBodyAnchorRatio), min: 0, max: 1)
     }
@@ -421,5 +366,21 @@ final class HybridVisionTrackingService {
         default:
             return rect
         }
+    }
+
+    private func analysisTimeRange(for duration: CMTime) -> CMTimeRange? {
+        let totalSeconds = duration.seconds
+        guard totalSeconds.isFinite, totalSeconds > 0 else { return nil }
+
+        let startSeconds = AppConfig.analysisSkipLeadingSeconds
+        let endSeconds = max(totalSeconds - AppConfig.analysisSkipTrailingSeconds, startSeconds)
+
+        guard endSeconds - startSeconds >= 8.0 else {
+            return nil
+        }
+
+        let start = CMTime(seconds: startSeconds, preferredTimescale: 600)
+        let end = CMTime(seconds: endSeconds, preferredTimescale: 600)
+        return CMTimeRange(start: start, end: end)
     }
 }

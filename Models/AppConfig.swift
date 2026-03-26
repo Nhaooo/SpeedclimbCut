@@ -4,6 +4,8 @@ import CoreGraphics
 struct AppConfig {
     static let analysisFPS: Int = 10
     static let maxVideoDimension: CGFloat = 80.0
+    static let analysisSkipLeadingSeconds: Double = 5.0
+    static let analysisSkipTrailingSeconds: Double = 5.0
 
     static let motionAnalysisFPS: Double = 8.0
     static let motionMinAnalysisFPS: Double = 5.0
