@@ -6,6 +6,8 @@ struct AppConfig {
     static let maxVideoDimension: CGFloat = 80.0
 
     static let motionAnalysisFPS: Double = 8.0
+    static let motionMinAnalysisFPS: Double = 5.0
+    static let motionTargetMaxSamples: Double = 1200.0
     static let motionGridWidth: Int = 10
     static let motionGridHeight: Int = 20
     static let motionThreshold: Int = 20

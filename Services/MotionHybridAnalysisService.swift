@@ -35,7 +35,14 @@ final class MotionHybridAnalysisService {
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
 
     func analyze(asset: AVAsset, videoTrack: AVAssetTrack, orientation: CGImagePropertyOrientation) async throws -> Analysis {
-        let curve = try extractMotionCurve(asset: asset, videoTrack: videoTrack, orientation: orientation)
+        let assetDuration = (try? await asset.load(.duration))?.seconds ?? videoTrack.timeRange.duration.seconds
+        let targetFPS = recommendedAnalysisFPS(for: assetDuration)
+        let curve = try extractMotionCurve(
+            asset: asset,
+            videoTrack: videoTrack,
+            orientation: orientation,
+            targetFPS: targetFPS
+        )
 
         guard !curve.times.isEmpty else {
             return Analysis(
@@ -66,7 +73,7 @@ final class MotionHybridAnalysisService {
         let minMotion = curve.values.min() ?? 0
 
         let logs = """
-        Motion analysis: \(curve.values.count) samples, target \(Int(AppConfig.motionAnalysisFPS)) FPS, effective \(String(format: "%.2f", effectiveFPS)) FPS over \(String(format: "%.2f", analyzedSpan))s.
+        Motion analysis: \(curve.values.count) samples, target \(String(format: "%.2f", targetFPS)) FPS, effective \(String(format: "%.2f", effectiveFPS)) FPS over \(String(format: "%.2f", analyzedSpan))s.
         Motion curve -> min: \(String(format: "%.3f", minMotion)), max: \(String(format: "%.3f", Double(peakMotion))), non-zero: \(nonZeroSamples), peak time: \(String(format: "%.2f", peakTime))
         Motion baseline -> start: \(baseline.startTime ?? -1), top: \(baseline.topTime ?? -1)
         Motion valley_peak -> start: \(valleyPeak.startTime ?? -1), top: \(valleyPeak.topTime ?? -1)
@@ -82,7 +89,12 @@ final class MotionHybridAnalysisService {
         )
     }
 
-    private func extractMotionCurve(asset: AVAsset, videoTrack: AVAssetTrack, orientation: CGImagePropertyOrientation) throws -> MotionCurve {
+    private func extractMotionCurve(
+        asset: AVAsset,
+        videoTrack: AVAssetTrack,
+        orientation: CGImagePropertyOrientation,
+        targetFPS: Double
+    ) throws -> MotionCurve {
         let reader = try AVAssetReader(asset: asset)
         let outputSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
@@ -109,7 +121,7 @@ final class MotionHybridAnalysisService {
             )
         }
 
-        let frameInterval = CMTime(seconds: 1.0 / AppConfig.motionAnalysisFPS, preferredTimescale: 600)
+        let frameInterval = CMTime(seconds: 1.0 / targetFPS, preferredTimescale: 600)
         var nextTargetTime = CMTime.zero
         var previousGrid: [UInt8]?
         var times: [Double] = []
@@ -122,8 +134,15 @@ final class MotionHybridAnalysisService {
                 continue
             }
 
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-                  let grid = renderGrid(from: pixelBuffer, orientation: orientation) else {
+            let grid: [UInt8]? = autoreleasepool {
+                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                    return nil
+                }
+
+                return renderGrid(from: pixelBuffer, orientation: orientation)
+            }
+
+            guard let grid else {
                 nextTargetTime = CMTimeAdd(nextTargetTime, frameInterval)
                 CMSampleBufferInvalidate(sampleBuffer)
                 continue
@@ -401,5 +420,14 @@ final class MotionHybridAnalysisService {
         guard span > 0 else { return 0 }
 
         return Double(times.count - 1) / span
+    }
+
+    private func recommendedAnalysisFPS(for duration: Double) -> Double {
+        guard duration.isFinite, duration > 0 else {
+            return AppConfig.motionAnalysisFPS
+        }
+
+        let cappedFPS = AppConfig.motionTargetMaxSamples / duration
+        return min(AppConfig.motionAnalysisFPS, max(AppConfig.motionMinAnalysisFPS, cappedFPS))
     }
 }
